@@ -1,6 +1,10 @@
 # My First Voxel Engine
 ![](screenshots/image.png)
 
+# Building
+1. Run `setup_windows.bat` (or use command `premake5 vs2022` if you have premake)
+2. Open generated Visual Studio Solution to build code
+
 # Technical Information
 ### Features:
 - Infinite terrain generation (using basic perlin noise)
