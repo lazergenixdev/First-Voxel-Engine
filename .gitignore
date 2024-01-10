@@ -1,0 +1,35 @@
+# Compiled Object files
+**.slo
+**.lo
+**.o
+**.obj
+
+# Built Config files
+sandbox/etc/
+
+# Log files
+*.log
+
+# Visual Studio files and folder
+.vs/
+**.sln
+**.vcxproj
+**.vcxproj.user
+**.vcxproj.filters
+# Complement to resource files
+**.aps
+
+# get tf outta here "Visual Studio Code"
+**.vscode
+
+# Build Binaries
+bin/
+bin-int/
+
+# copyright lol
+**.mp3
+
+# debug stuff
+*.ini
+*.args.json
+
