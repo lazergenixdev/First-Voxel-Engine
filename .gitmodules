@@ -1,0 +1,3 @@
+[submodule "Fission"]
+	path = Fission
+	url = https://github.com/lazergenixdev/Fission
