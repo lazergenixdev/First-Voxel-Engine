@@ -12,6 +12,10 @@ float getPixelDepth(int x, int y) {
     return texture(depth, uv + vec2(float(x)/resolution.x, float(y)/resolution.y)).r;
 }
 
+layout (push_constant) uniform A {
+    vec3 color;
+} p;
+
 void main() {
     float d = getPixelDepth(0, 0);
     float depthDiff = 0.0;
@@ -26,6 +30,5 @@ void main() {
     depthDiff += abs(d - getPixelDepth( 1, 1));
 
     //fragColor = vec4(vec3(1.0), smoothstep(0.001, 0.01, depthDiff));
-    //fragColor = vec4(vec3(0.0), depthDiff*32.0);
-    fragColor = vec4(vec3(1.0), depthDiff*32.0);
+    fragColor = vec4(p.color, depthDiff*32.0);
 }

@@ -48,35 +48,59 @@ static std::uniform_int_distribution<unsigned int> dist_h{ 0, 8 };
 
 struct Chunk_Mesh {
 	VmaAllocation vertex_allocation;
-	VmaAllocation index_allocation;
 	VkBuffer      vertex_buffer;
-	VkBuffer      index_buffer;
-	int           index_count;
+
+	static VmaAllocation index_allocation;
+	static VkBuffer      index_buffer;
+	
+	int index_count;
 
 	bool ready_to_render = false;
 
 	int number_of_quads = 0;
 	int bytes_used = 0;
 
+	static constexpr fs::u32 max_vertex_count = 1 << 11;
+
 	auto create(fs::Graphics& gfx) -> void {
 		VmaAllocationCreateInfo ai = {};
-		ai.usage = VMA_MEMORY_USAGE_AUTO;
+		ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
 		ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 		VkBufferCreateInfo bi = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
 
-		bi.size = (1 << 12) * sizeof(vertex);
+		bi.size = max_vertex_count * sizeof(vertex);
 		bi.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-		vmaCreateBuffer(gfx.allocator, &bi, &ai, &vertex_buffer, &vertex_allocation, nullptr);
+		auto vkr = vmaCreateBuffer(gfx.allocator, &bi, &ai, &vertex_buffer, &vertex_allocation, nullptr);
+		if (vkr) {
+			VmaTotalStatistics stats;
+			vmaCalculateStatistics(gfx.allocator, &stats);
+			__debugbreak();
+		}
 		total_gpu_memory += bi.size;
 
-		bi.size = ((1 << 12) * 6) / 4 * sizeof(fs::u16);
-		bi.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-		vmaCreateBuffer(gfx.allocator, &bi, &ai, &index_buffer, &index_allocation, nullptr);
-		total_gpu_memory += bi.size;
+		if (!index_allocation) {
+			bi.size = (max_vertex_count * 6) / 4 * sizeof(fs::u16);
+			bi.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+			ai.flags = 0;
+			vmaCreateBuffer(gfx.allocator, &bi, &ai, &index_buffer, &index_allocation, nullptr);
+
+			static constexpr char index_list[] = {
+				0, 1, 2, 2, 3, 0,
+			};
+
+			fs::u16* id = new fs::u16[bi.size];
+			for_n (v, max_vertex_count/4)
+			FS_FOR(6) id[index_count++] = v*4 + index_list[i];
+			index_count = 0;
+			gfx.upload_buffer(index_buffer, id, bi.size);
+		}
 	}
 	auto destroy(fs::Graphics& gfx) -> void {
 		vmaDestroyBuffer(gfx.allocator, vertex_buffer, vertex_allocation);
-		vmaDestroyBuffer(gfx.allocator, index_buffer, index_allocation);
+		if (index_allocation) {
+			vmaDestroyBuffer(gfx.allocator, index_buffer, index_allocation);
+			index_allocation = nullptr;
+		}
 	}
 
 	struct Upload_Context {
@@ -89,20 +113,16 @@ struct Chunk_Mesh {
 		ready_to_render = false;
 		index_count = 0;
 		vertex * vd;
-		fs::u16* id;
 		vmaMapMemory(gfx.allocator, vertex_allocation, (void**)&vd);
-		vmaMapMemory(gfx.allocator, index_allocation, (void**)&id);
 		used_gpu_memory -= bytes_used;
 		quad_count -= number_of_quads;
 		number_of_quads = 0;
-		return { vd, id, 0 };
+		return { vd, nullptr, 0 };
 	}
 	auto upload_end(fs::Graphics& gfx, Upload_Context& ctx) -> void {
 		vmaUnmapMemory(gfx.allocator, vertex_allocation);
-		vmaUnmapMemory(gfx.allocator, index_allocation);
 		vmaFlushAllocation(gfx.allocator, vertex_allocation, 0, ctx.vertex_count * sizeof(vertex));
-		vmaFlushAllocation(gfx.allocator, index_allocation, 0, index_count * sizeof(fs::u16));
-		bytes_used = ctx.vertex_count * sizeof(vertex) + index_count * sizeof(fs::u16);
+		bytes_used = ctx.vertex_count * sizeof(vertex);
 		used_gpu_memory += bytes_used;
 		quad_count += number_of_quads;
 		ready_to_render = true;
@@ -112,17 +132,10 @@ struct Chunk_Mesh {
 		auto& [vd, id, vertex_count] = ctx;
 		for (auto const& q : quads) {
 			auto na = q.normal_axis;
-			static constexpr char index_list[] = {
-				0, 1, 2, 2, 3, 0,
-				1, 0, 2, 3, 2, 0,
-			};
 
-			int offset = 0;
 			if (na < 0) {
 				na += 3;
-				offset += 6;
 			}
-			FS_FOR(6) id[index_count++] = vertex_count + index_list[offset + i];
 
 			union vec3 {
 				char comp[4];
@@ -152,10 +165,18 @@ struct Chunk_Mesh {
 
 			float normal = 0.5f + float(q.normal_axis + 3);
 			float u1 = float(q.i1 - q.i0), v1 = float(q.j1 - q.j0);
-			vd[vertex_count++] = { fs::v3f32(float(p00.x), float(p00.y + oy), float(p00.z)), {0.0f, 0.0f, normal} };
-			vd[vertex_count++] = { fs::v3f32(float(p01.x), float(p01.y + oy), float(p01.z)), {0.0f, v1  , normal} };
-			vd[vertex_count++] = { fs::v3f32(float(p11.x), float(p11.y + oy), float(p11.z)), {u1  , v1  , normal} };
-			vd[vertex_count++] = { fs::v3f32(float(p10.x), float(p10.y + oy), float(p10.z)), {u1  , 0.0f, normal} };
+			if (q.normal_axis >= 0) {
+				vd[vertex_count++] = { fs::v3f32(float(p00.x), float(p00.y + oy), float(p00.z)), {0.0f, 0.0f, normal} };
+				vd[vertex_count++] = { fs::v3f32(float(p01.x), float(p01.y + oy), float(p01.z)), {0.0f, v1  , normal} };
+				vd[vertex_count++] = { fs::v3f32(float(p11.x), float(p11.y + oy), float(p11.z)), {u1  , v1  , normal} };
+				vd[vertex_count++] = { fs::v3f32(float(p10.x), float(p10.y + oy), float(p10.z)), {u1  , 0.0f, normal} };
+			} else {
+				vd[vertex_count++] = { fs::v3f32(float(p01.x), float(p01.y + oy), float(p01.z)), {0.0f, v1  , normal} };
+				vd[vertex_count++] = { fs::v3f32(float(p00.x), float(p00.y + oy), float(p00.z)), {0.0f, 0.0f, normal} };
+				vd[vertex_count++] = { fs::v3f32(float(p10.x), float(p10.y + oy), float(p10.z)), {u1  , 0.0f, normal} };
+				vd[vertex_count++] = { fs::v3f32(float(p11.x), float(p11.y + oy), float(p11.z)), {u1  , v1  , normal} };
+			}
+			index_count += 6;
 		}
 		number_of_quads += (int)quads.size();
 	};
@@ -167,6 +188,9 @@ struct Chunk_Mesh {
 		vkCmdDrawIndexed(ctx->command_buffer, index_count, 1, 0, 0, 0);
 	}
 };
+
+VmaAllocation Chunk_Mesh::index_allocation;
+VkBuffer      Chunk_Mesh::index_buffer;
 
 struct World {
 	using Chunk_Mask = fs::byte[8*8];
@@ -543,7 +567,7 @@ struct Renderer {
 		auto image_format = VK_FORMAT_R8G8B8A8_UNORM;
 
 		int w, h, comp;
-		auto image_data = stbi_load("block_atlas_96x128.png", &w, &h, &comp, 4);
+		auto image_data = stbi_load("../assets/block_atlas_96x128.png", &w, &h, &comp, 4);
 
 		Image_Creator ic(image_format, VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT, {.width = fs::u32(w), .height = fs::u32(h)});
 		ic.image_info.mipLevels = 5;

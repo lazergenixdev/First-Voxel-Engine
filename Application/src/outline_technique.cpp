@@ -48,6 +48,7 @@ void Outline_Technique::create(fs::Graphics& gfx)
 
 	Pipeline_Layout_Creator{}
 		.add_layout(engine.texture_layout.handle)
+		.add_push_range(VK_SHADER_STAGE_FRAGMENT_BIT, 16)
 		.create(&post_pipeline_layout);
 
 	auto vs = fs::create_shader(gfx.device, post_fx_vertex_shader::size, post_fx_vertex_shader::data);
@@ -198,6 +199,8 @@ void Outline_Technique::end(fs::Render_Context* ctx)
 		vkCmdSetScissor(ctx->command_buffer, 0, 1, &scissor);
 
 		FS_VK_BIND_DESCRIPTOR_SETS(ctx->command_buffer, post_pipeline_layout, 1, &depth_set);
+
+		vkCmdPushConstants(ctx->command_buffer, post_pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(outline_color), outline_color);
 
 		vkCmdDraw(ctx->command_buffer, 3, 1, 0, 0);
 	}

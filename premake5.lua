@@ -4,21 +4,21 @@ FISSION_LOCATION = "%{wks.location}/Fission"
 function include_project(name)
 	fission_project(name)
 	location(name)
-
+	
 	prebuild_shader_compile("%{prj.location}")
-
+	
     files {
 		"%{prj.location}/src/**";
 		"%{prj.location}/shaders/**"
 	}
-
+	
 	includedirs {
 		'%{wks.location}/include',
 		'%{prj.location}/src'
 	}
 end
 
-workspace 'Fission-Demos'
+workspace 'Voxel-Engine'
 	architecture "x86_64"
 	configurations { 'Debug', 'Release', 'Dist' }
 	
@@ -27,7 +27,7 @@ workspace 'Fission-Demos'
 	flags { 'MultiProcessorCompile', 'MFC' }
 	defines '_CRT_SECURE_NO_WARNINGS'
 	
-	startproject 'Simple Ball'
+	startproject 'Application'
 	
 	group "Dependencies"
 	include 'Fission'

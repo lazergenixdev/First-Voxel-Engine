@@ -54,13 +54,13 @@ struct Skybox {
 		{
 			int w, h, comp;
 #if defined(RED_SKY)
-			stbi_info("bkg/red/bkg2_right1.png", &w, &h, &comp);
+			stbi_info("../assets/red/bkg2_right1.png", &w, &h, &comp);
 #elif defined(BLUE_SKY)
-			stbi_info("bkg/blue/bkg1_back.png", &w, &h, &comp);
+			stbi_info("../assets/blue/bkg1_back.png", &w, &h, &comp);
 #elif defined(CLOUD_SKY)
-			stbi_info("bkg/clouds1/east.bmp", &w, &h, &comp);
+			stbi_info("../assets/clouds1/east.bmp", &w, &h, &comp);
 #elif defined(URBAN_SKY)
-			stbi_info("bkg/Roundabout/posx.jpg", &w, &h, &comp);
+			stbi_info("../assets/Roundabout/posx.jpg", &w, &h, &comp);
 #endif
 
 			auto ic = Image_Creator{format, VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT, {unsigned(w), unsigned(h)}};
@@ -75,33 +75,33 @@ struct Skybox {
 				gfx.upload_image(image.image, data, {unsigned(w), unsigned(h), 1}, format, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, i);
 			};
 #if defined(RED_SKY)
-			do_thing(0, "bkg/red/bkg2_right1.png");
-			do_thing(1, "bkg/red/bkg2_left2.png");
-			do_thing(2, "bkg/red/bkg2_top3.png");
-			do_thing(3, "bkg/red/bkg2_bottom4.png");
-			do_thing(4, "bkg/red/bkg2_front5.png");
-			do_thing(5, "bkg/red/bkg2_back6.png");
+			do_thing(0, "../assets/red/bkg2_right1.png");
+			do_thing(1, "../assets/red/bkg2_left2.png");
+			do_thing(2, "../assets/red/bkg2_top3.png");
+			do_thing(3, "../assets/red/bkg2_bottom4.png");
+			do_thing(4, "../assets/red/bkg2_front5.png");
+			do_thing(5, "../assets/red/bkg2_back6.png");
 #elif defined(BLUE_SKY)
-			do_thing(0, "bkg/blue/bkg1_right.png");
-			do_thing(1, "bkg/blue/bkg1_left.png");
-			do_thing(2, "bkg/blue/bkg1_top.png");
-			do_thing(3, "bkg/blue/bkg1_bot.png");
-			do_thing(4, "bkg/blue/bkg1_front.png");
-			do_thing(5, "bkg/blue/bkg1_back.png");
+			do_thing(0, "../assets/blue/bkg1_right.png");
+			do_thing(1, "../assets/blue/bkg1_left.png");
+			do_thing(2, "../assets/blue/bkg1_top.png");
+			do_thing(3, "../assets/blue/bkg1_bot.png");
+			do_thing(4, "../assets/blue/bkg1_front.png");
+			do_thing(5, "../assets/blue/bkg1_back.png");
 #elif defined(CLOUD_SKY)
-			do_thing(0, "bkg/clouds1/east.bmp");
-			do_thing(1, "bkg/clouds1/west.bmp");
-			do_thing(2, "bkg/clouds1/up.bmp");
-			do_thing(3, "bkg/clouds1/down.bmp");
-			do_thing(4, "bkg/clouds1/north.bmp");
-			do_thing(5, "bkg/clouds1/south.bmp");
+			do_thing(0, "../assets/clouds1/east.bmp");
+			do_thing(1, "../assets/clouds1/west.bmp");
+			do_thing(2, "../assets/clouds1/up.bmp");
+			do_thing(3, "../assets/clouds1/down.bmp");
+			do_thing(4, "../assets/clouds1/north.bmp");
+			do_thing(5, "../assets/clouds1/south.bmp");
 #elif defined(URBAN_SKY)
-			do_thing(0, "bkg/" SKYBOX_FOLDER "/posx.jpg");
-			do_thing(1, "bkg/" SKYBOX_FOLDER "/negx.jpg");
-			do_thing(2, "bkg/" SKYBOX_FOLDER "/posy.jpg");
-			do_thing(3, "bkg/" SKYBOX_FOLDER "/negy.jpg");
-			do_thing(4, "bkg/" SKYBOX_FOLDER "/posz.jpg");
-			do_thing(5, "bkg/" SKYBOX_FOLDER "/negz.jpg");
+			do_thing(0, "../assets/Backyard/posx.jpg");
+			do_thing(1, "../assets/Backyard/negx.jpg");
+			do_thing(2, "../assets/Backyard/posy.jpg");
+			do_thing(3, "../assets/Backyard/negy.jpg");
+			do_thing(4, "../assets/Backyard/posz.jpg");
+			do_thing(5, "../assets/Backyard/negz.jpg");
 #endif
 		}
 		{

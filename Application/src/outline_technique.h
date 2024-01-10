@@ -34,4 +34,6 @@ struct Outline_Technique {
 	VkDescriptorSet   depth_set;
 
 	VkFramebuffer     frame_buffers[fs::Graphics::max_sc_images];
+
+	float outline_color[4] = {1.0f, 1.0f, 1.0f, 0.0f};
 };
