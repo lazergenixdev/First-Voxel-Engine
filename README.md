@@ -8,7 +8,7 @@
 # Technical Information
 ### Features:
 - Infinite terrain generation (using basic perlin noise)
-- Dynamic chunk remeshing (single-threaded)
+- Dynamic chunk remeshing (multi-threaded)
 - Static skybox (just using a cubemap)
 - Greedy Meshing (unoptimized, but still reasonably fast)
 - Basic diffuse + specular lighting
@@ -26,7 +26,6 @@
 - Dynamic skybox with sun as directional light source
 - Shadow mapping
 - Screen-Space Ambient Occlusion
-- Multi-threaded chunk generation and meshing
 - Distance Fog
 - Frustum Culling
 - Add/Removing blocks
