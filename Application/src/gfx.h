@@ -6,15 +6,18 @@
 extern fs::Engine engine;
 
 namespace vk {
-#define VK_HANDLE_MEMBER_FUNCTIONS(NAME)      \
+#define VK_UNIQUE_HANDLE(NAME) \
+	struct NAME { \
+	Vk##NAME handle = VK_NULL_HANDLE; \
 	Vk##NAME * operator&() { return &handle; } \
 	operator Vk##NAME() { return handle; }      \
+	NAME() = default; \
+	NAME(NAME&) = delete; \
+	NAME(NAME const&) = delete; \
+	~NAME() { if (handle) vkDestroy##NAME(engine.graphics.device, handle, nullptr); }};
 
-	struct Pipeline {
-		VkPipeline handle;
-		VK_HANDLE_MEMBER_FUNCTIONS(Pipeline)
-		~Pipeline() { vkDestroyPipeline(engine.graphics.device, handle, nullptr); }
-	};
+	VK_UNIQUE_HANDLE(Pipeline);
+	VK_UNIQUE_HANDLE(PipelineLayout);
 }
 
 struct Pipeline_Layout_Creator {

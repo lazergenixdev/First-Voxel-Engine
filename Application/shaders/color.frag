@@ -1,4 +1,5 @@
 #version 450 core
+#include "../src/config.hpp"
 
 layout (location = 0) in  vec4 in_position;
 layout (location = 1) in  vec2 uv;
@@ -41,7 +42,7 @@ const vec2 atlas_size = vec2(16.0) / vec2(128.0,96.0);
 
 void main() {
 #if 0
-    fragColor = vec4((in_position + vec3(1.0)) * 0.5, 1.0);
+    fragColor = vec4(vec3(1.0)-in_position.xyz/vec2(48.0*8.0, 16.0*8.0).xyx, 1.0);
 #elif 0
     float a = atan(6.28318530718*0.5 + in_position.x / in_position.z) / (6.28318530718/4.0);
     vec3 normal = normal_map[normal_index];
@@ -67,7 +68,14 @@ void main() {
         specular = 1.0 * SpecularFactor;
     }
 
+#if RAIN
+    vec4 final_color = vec4((vec3(diffuse + ambient) + specular * vec3(0.0, 1.0, 1.0)) * object_color, 1.0);
+    float fog_blend = 0.01*length(u.eye_position - in_position.xyz);
+    fragColor = mix(final_color, vec4(0.1), max(min(fog_blend,1.0),0.0));
+#else
     fragColor = vec4((vec3(diffuse + ambient) + specular * vec3(0.0, 1.0, 1.0)) * object_color, 1.0);
+#endif
+
 //    fragColor = vec4(normal, 1.0);
 #elif 0
     vec3 normal = normal_map[normal_index];
@@ -77,6 +85,6 @@ void main() {
     float ambient = 0.05;
     fragColor = vec4(vec3(diffuse + ambient) * object_color, 1.0);
 #elif 0
-    fragColor = vec4(vec3(length(u.eye_position - in_position.xyz) * 0.1), 1.0);
+    fragColor = vec4(vec3(0.0), 1.0);
 #endif
 }
