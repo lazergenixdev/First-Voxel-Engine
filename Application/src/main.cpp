@@ -28,8 +28,9 @@ struct vertex {
 #define TERRAIN_MOUNTAINS 1
 #define TERRAIN 1
 auto terrain_height_from_location(int x, int z) -> float {
-//	return 1.0f * stb_perlin_ridge_noise3(float(x) / 64.0f, float(z) / 64.0f, 0.225f, 2.0f, 0.5f, 1.0f, 6); // mountains
-	return 1.0f + 0.7f * stb_perlin_fbm_noise3(float(x) / 64.0f, float(z) / 64.0f, 0.435f, 2.0f, 0.5f, 8); // bumpy
+	return 1.0f * stb_perlin_ridge_noise3(float(x) / 256.0f, float(z) / 256.0f, 0.225f, 2.0f, 0.5f, 1.0f, 6); // mountains
+//	return 2.0f * stb_perlin_ridge_noise3(float(x) / 64.0f, float(z) / 64.0f, 0.225f, 2.0f, 0.5f, 1.0f, 6); // spiky mountains
+//	return 1.0f + 0.7f * stb_perlin_fbm_noise3(float(x) / 256.0f, float(z) / 256.0f, 0.435f, 2.0f, 0.5f, 8); // bumpy
 //	return 0.5f + 0.2f * stb_perlin_fbm_noise3(float(x) / 64.0f, float(z) / 64.0f, 0.435f, 2.0f, 0.3f, 8); // flat
 }
 
@@ -51,7 +52,7 @@ struct Chunk_Mesh {
 	int number_of_quads = 0;
 	int bytes_used = 0;
 
-	static constexpr fs::u32 max_vertex_count = 1 << 12;
+	static constexpr fs::u32 max_vertex_count = 1 << 11;
 
 	auto create(fs::Graphics& gfx) -> void {
 		VmaAllocationCreateInfo ai = {};
@@ -284,7 +285,6 @@ struct World {
 		auto look = new_chunk_offset - chunk_offset;
 		int c_diameter = chunk_diameter();
 		
-	//	WaitForSingleObject(info.semaphore.handle, INFINITE);
 		{
 			std::scoped_lock lock{info.mutex};
 		}
@@ -496,7 +496,7 @@ struct World {
 					block_mask[y*8 + z] |= (1 << x);
 				}
 #else
-				block_mask[y * 8 + z] |= ((perlin_noise(x + offset.x*8, y + cy*8, z + offset.z*8) > 0.3f) << x);
+				block_mask[y * 8 + z] |= ((perlin_noise(x + offset.x*8, y + cy*8, z + offset.z*8) > 0.1f) << x);
 #endif
 			}
 		}
@@ -794,6 +794,7 @@ struct Renderer {
 	}
 };
 
+// This is a terrible rain implementation, very not optimal
 #if RAIN
 struct Rain {
 	struct Particle {
@@ -982,15 +983,12 @@ public:
 			}
 			else if (e.key_down.key_id == fs::keys::T)
 				camera_controller.position = {};
-			else if (e.key_down.key_id == fs::keys::L) {
+			else if (e.key_down.key_id == fs::keys::L)
 				wireframe = !wireframe;
-			}
-			else if (e.key_down.key_id == fs::keys::K) {
-			//	if (wireframe) 
-			//		wireframe_depth = !wireframe_depth;
-			//	else
-					post_fx_enable = !post_fx_enable;
-			}
+			else if (e.key_down.key_id == fs::keys::K)
+				post_fx_enable = !post_fx_enable;
+			else if (e.key_down.key_id == fs::keys::J)
+				wireframe_depth = !wireframe_depth;
 
 			else if (e.key_down.key_id == fs::keys::Up)
 				_amplitude += 0.1f;
@@ -1048,7 +1046,7 @@ public:
 		auto total_mib = double(total_vertex_gpu_memory)/double(1024*1024);
 		auto usage = double(100 * used_vertex_gpu_memory) / double(total_vertex_gpu_memory);
 		engine.debug_layer.add("GPU memory usage: %.2f%% / %.3f MiB", usage, total_mib);
-		engine.debug_layer.add("memory overflow? %s (If this is yes, how have we not crashed?)", (ran_out_of_memory?"Yes":"No"));
+		engine.debug_layer.add("memory overflow? %s (have we crashed?)", (ran_out_of_memory?"Yes":"No"));
 	}
 
 	virtual void on_resize() override {
@@ -1090,7 +1088,7 @@ int chunk_generation_thread_main(Chunk_Generation_Thread_Info* info) {
 
 		info->working = true;
 		fs::byte mask[8 * 8];
-		memset(mask, 0, 8 * 8);
+		memset(mask, 0xFF, 8 * 8);
 		while (info->work_queue.size()) {
 			auto& work = info->work_queue.back();
 			info->work_queue.pop_back();

@@ -200,6 +200,12 @@ void Outline_Technique::end(fs::Render_Context* ctx)
 
 		FS_VK_BIND_DESCRIPTOR_SETS(ctx->command_buffer, post_pipeline_layout, 1, &depth_set);
 
+#if 0 // rainbow outline, very cool :)
+		static float t = 0.0f;
+		t += 1.0f/120.0f;
+		auto temp = fs::rgba(fs::hsv(t, 1.0f, 1.0f));
+		memcpy(outline_color, &temp, sizeof(outline_color));
+#endif
 		vkCmdPushConstants(ctx->command_buffer, post_pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(outline_color), outline_color);
 
 		vkCmdDraw(ctx->command_buffer, 3, 1, 0, 0);

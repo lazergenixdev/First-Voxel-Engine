@@ -5,7 +5,6 @@ struct quad {
 	char i0, i1, j0, j1;
 	char slice;
 	char normal_axis;
-	char padding[2];
 };
 static constexpr int sizeof_quad = sizeof(quad);
 

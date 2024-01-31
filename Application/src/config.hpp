@@ -13,5 +13,5 @@ inline int64_t total_vertex_gpu_memory = 0;
 inline int64_t used_vertex_gpu_memory  = 0;
 inline int64_t total_number_of_quads   = 0;
 
-inline int render_chunk_radius = RAIN?12:48;
+inline int render_chunk_radius = RAIN?12:64;
 #endif

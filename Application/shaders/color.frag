@@ -40,6 +40,10 @@ const vec2[6] atlas_offsets = vec2[6] (
 );
 const vec2 atlas_size = vec2(16.0) / vec2(128.0,96.0);
 
+const float[6] spec_map = float[6] (
+    1.0, 0.0, 0.5, 0.25, 0.0, 1.0
+);
+
 void main() {
 #if 0
     fragColor = vec4(vec3(1.0)-in_position.xyz/vec2(48.0*8.0, 16.0*8.0).xyx, 1.0);
@@ -55,7 +59,6 @@ void main() {
     vec3 inside = in_position.xyz - normal * 0.5;
     inside.x = 0; inside.z = 0; // TODO: delete me
     uint index = texelFetch(block_types, ivec3(inside), 0).r & 7;
-   //index = 6;
     vec3 object_color = texture(atlas, vec2(float(index) * 16.0/128.0, atlas_offsets[normal_index].y) + fract(uv) * atlas_size).rgb;
     float ambient = 0.05;
     
@@ -65,7 +68,7 @@ void main() {
     float SpecularFactor = dot(VertexToEye, LightReflect);
     if (SpecularFactor > 0) {
         SpecularFactor = pow(SpecularFactor, 32.0);
-        specular = 1.0 * SpecularFactor;
+        specular = spec_map[index] * SpecularFactor;
     }
 
 #if RAIN
