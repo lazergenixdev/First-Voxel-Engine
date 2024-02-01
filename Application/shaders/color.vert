@@ -1,20 +1,29 @@
 #version 450 core
 
 layout (location = 0) in  vec3 v_position;
-layout (location = 1) in  vec3 v_texcoord;
-layout (location = 0) out vec4 out_position;
-layout (location = 1) out vec2 out_texcoord;
-layout (location = 2) out flat uint out_normal_index;
+layout (location = 0) out vec3 f_position;
+layout (location = 1) out flat vec3 f_color;
 
 layout (push_constant) uniform A {
 	mat4 view_projection;
-	vec3 chunk_position;
+//	vec3 chunk_position;
 } transform;
 
+vec3[8] color_map = vec3[8] (
+	vec3(1.0, 0.0, 0.0),
+	vec3(0.0, 1.0, 0.0),
+	vec3(0.0, 0.0, 1.0),
+	vec3(0.0, 1.0, 1.0),
+	vec3(1.0, 0.0, 1.0),
+	vec3(1.0, 1.0, 0.0),
+	vec3(0.5, 0.5, 0.5),
+	vec3(1.0, 1.0, 1.0)
+);
+
 void main() {
-	vec3 position = v_position + transform.chunk_position * 8.0;
+	int i = gl_VertexIndex/(33*33);
+	vec3 position = v_position;
+	f_position = v_position;
+	f_color = color_map[i%8];
 	gl_Position = transform.view_projection * vec4(position, 1.0);
-	out_position = vec4(position, gl_Position.z/100.0);
-	out_texcoord = v_texcoord.xy;
-	out_normal_index = uint(v_texcoord.z);
 }

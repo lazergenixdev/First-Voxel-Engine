@@ -32,19 +32,20 @@ auto Camera_Controller::get_transform() const -> glm::mat4 {
 	glm::mat4 Projection = fs::lerp(Perspective, Orthographic, abs(sinf(t)));
 #endif
 
-	auto P = position - glm::vec3((glm::ivec3(glm::floor(position)) >> 3) << 3);
-	P += glm::vec3(float(render_chunk_radius * 8), 0, float(render_chunk_radius * 8));
-	P.y = position.y;
+//	auto P = position - glm::vec3((glm::ivec3(glm::floor(position)) >> 3) << 3);
+//	P += glm::vec3(float(render_chunk_radius * 8), 0, float(render_chunk_radius * 8));
+//	P.y = position.y;
+	auto P = position;
 
-	auto eye = 0.25f * P;
+	auto eye = P;
 	auto center = get_view_direction() + eye;
 	auto up = glm::vec3(0.0f, 1.0f, 0.0f);
 
 	return glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f))
 		* Projection
-		* glm::lookAtLH(eye, center, up)
+		* glm::lookAtLH(eye, center, up);
 		//	* glm::translate(glm::mat4(1.0f), -0.1f * position)
-		* glm::scale(glm::mat4(1.0f), glm::vec3(0.25f));
+	//	* glm::scale(glm::mat4(1.0f), glm::vec3(0.25f));
 }
 
 auto Camera_Controller::get_skybox_transform() const -> glm::mat4
