@@ -45,7 +45,7 @@ struct World {
 		using namespace fs;
 		root = new LOD_Tree(0);
 		int max_lod = 8;
-		render_distance = float(8 << max_lod);
+		render_distance = float((8) << max_lod);
 
 		auto generate_lod_sub_tree = [](LOD_Tree* node, rf32 rect, int max, int offset) {
 			auto p = reinterpret_cast<LOD_Tree**>(node);
@@ -66,6 +66,30 @@ struct World {
 		generate_lod_sub_tree(root->q01 = new LOD_Tree(0), quadrant(base, 0b01), max_lod, 0b10);
 		generate_lod_sub_tree(root->q10 = new LOD_Tree(0), quadrant(base, 0b10), max_lod, 0b01);
 		generate_lod_sub_tree(root->q11 = new LOD_Tree(0), quadrant(base, 0b11), max_lod, 0b00);
+
+	//	fix_lod(root, 4);
+	}
+
+	auto constexpr lod_from_distance(float dist) -> int {
+		return int(dist) >> 8;
+	}
+
+	auto fix_lod(LOD_Tree* node, int min_lod) -> void {
+		if (node == nullptr) return;
+		auto lod = node->lod;
+		if (lod != 0 && lod < min_lod) {
+			node->lod = 0;
+			float size = render_distance / float(1 << lod);
+			fs::rf32 rect = fs::rf32::from_center(node->center, size, size);
+			node->q00 = new LOD_Tree(lod+1, quadrant(rect, 0b00).center());
+			node->q01 = new LOD_Tree(lod+1, quadrant(rect, 0b01).center());
+			node->q10 = new LOD_Tree(lod+1, quadrant(rect, 0b10).center());
+			node->q11 = new LOD_Tree(lod+1, quadrant(rect, 0b11).center());
+		}
+		fix_lod(node->q00, min_lod);
+		fix_lod(node->q01, min_lod);
+		fix_lod(node->q10, min_lod);
+		fix_lod(node->q11, min_lod);
 	}
 };
 
@@ -82,20 +106,23 @@ namespace removethis {
 	inline float yoff = 0.0f;
 }
 float height_map(float x, float y) {
-	return 1.5f * stb_perlin_fbm_noise3((x + removethis::xoff)*0.12764f, (y + removethis::yoff)*0.12764f, 0.0f, 2.0f, 0.5f, 8);
+	return 3.0f * stb_perlin_fbm_noise3((x + removethis::xoff)*0.10346f, (y + removethis::yoff)*0.10346f, 0.0f, 2.0f, 0.5f, 8);
+//	return 4.0f * stb_perlin_noise3((x + removethis::xoff)*0.10346f, (y + removethis::yoff)*0.10346f, 0.0f, 0, 0, 0);
 }
+
+static constexpr int Vc = 32;
 
 void generate_mesh(Mesh& m, fs::v2f32 center, int lod, float rd) {
 	float size = rd / float(1 << lod);
 	fs::rf32 rect = fs::rf32::from_center(center, size, size);
 
 	m.vertex_array.clear();
-	m.vertex_array.reserve(33*33);
+	m.vertex_array.reserve((Vc+1)*(Vc+1));
 
-	for (int y = 0; y < 32+1; ++y)
-	for (int x = 0; x < 32+1; ++x) {
-		float xx = fs::lerp(rect.x.low, rect.x.high, float(x)/32.0f);
-		float yy = fs::lerp(rect.y.low, rect.y.high, float(y)/32.0f);
+	for (int y = 0; y < Vc+1; ++y)
+	for (int x = 0; x < Vc+1; ++x) {
+		float xx = fs::lerp(rect.x.low, rect.x.high, float(x)/float(Vc));
+		float yy = fs::lerp(rect.y.low, rect.y.high, float(y)/float(Vc));
 
 		m.vertex_array.emplace_back(Mesh::vertex{ .position = {xx,height_map(xx, yy),yy} });
 	}
@@ -114,7 +141,7 @@ void recursive_gen(std::vector<Mesh>& out, int& i, LOD_Tree* node, float rd) {
 
 void generate_meshes_from_world(World const& w, std::vector<Mesh>& out) {
 	out.clear();
-	out.resize(128);
+	out.resize(1<<14);
 	int i = 0;
 	recursive_gen(out, i, w.root, w.render_distance);
 	out.resize(i);
@@ -151,6 +178,7 @@ struct World_Renderer {
 
 	struct transform_data {
 		glm::mat4 view_projection;
+		float normal = 1.0f;
 	};
 
 	uint32_t index_count = 0;
@@ -161,7 +189,7 @@ struct World_Renderer {
 		auto& gfx = engine.graphics;
 
 		Pipeline_Layout_Creator{}
-			.add_push_range(VK_SHADER_STAGE_VERTEX_BIT, sizeof(transform_data))
+			.add_push_range(VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(transform_data))
 			.create(&pipeline_layout);
 
 		Render_Pass_Creator{3}
@@ -230,17 +258,17 @@ struct World_Renderer {
 			allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 			VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
 
-			bufferInfo.size = (1 << 18) * sizeof(fs::v3f32);
+			bufferInfo.size = (1 << 20) * sizeof(fs::v3f32);
 			bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 			vmaCreateBuffer(gfx.allocator, &bufferInfo, &allocInfo, &vertex_buffer, &vertex_allocation, nullptr);
 
-			bufferInfo.size = (1 << 13) * sizeof(fs::u16);
+			bufferInfo.size = (1 << 15) * sizeof(fs::u32);
 			bufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
 			vmaCreateBuffer(gfx.allocator, &bufferInfo, &allocInfo, &index_buffer, &index_allocation, nullptr);
 		}
 		{
-			std::vector<fs::u16> index_array;
-			int w = 33, h = 33;
+			std::vector<fs::u32> index_array;
+			int w = Vc+1, h = Vc+1;
 			for (int y = 0; y < h - 1; ++y)
 			for (int x = 0; x < w - 1; ++x) {
 				auto i = y * w + x;
@@ -252,7 +280,7 @@ struct World_Renderer {
 				index_array.emplace_back(i + w);
 			}
 
-			uint16_t* gpu_index_buffer;
+			uint32_t* gpu_index_buffer;
 			vmaMapMemory(engine.graphics.allocator, index_allocation, (void**)&gpu_index_buffer);
 			for (auto&& i : index_array) gpu_index_buffer[index_count++] = i;
 			vmaUnmapMemory(engine.graphics.allocator, index_allocation);
@@ -340,7 +368,7 @@ struct World_Renderer {
 		render_pass_begin_info.renderPass = render_pass;
 		vkCmdBeginRenderPass(ctx->command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
-		vkCmdBindIndexBuffer(ctx->command_buffer, index_buffer, 0, VK_INDEX_TYPE_UINT16);
+		vkCmdBindIndexBuffer(ctx->command_buffer, index_buffer, 0, VK_INDEX_TYPE_UINT32);
 		VkDeviceSize offset = 0;
 		vkCmdBindVertexBuffers(ctx->command_buffer, 0, 1, &vertex_buffer, &offset);
 
@@ -359,18 +387,20 @@ struct World_Renderer {
 
 		transform_data td;
 		td.view_projection = cc.get_transform();
-		vkCmdPushConstants(ctx->command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(td), &td);
+		td.normal = wireframe ? 1.0f : 1.0f;
+		vkCmdPushConstants(ctx->command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(td), &td);
 
+		uint32_t s = (Vc+1)*(Vc+1);
 		if (wireframe) {
 			vkCmdBindPipeline(ctx->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_pipeline);
-			FS_FOR(mesh_count) vkCmdDrawIndexed(ctx->command_buffer, index_count, 1, 0, 33*33*i, 0);
+			FS_FOR(mesh_count) vkCmdDrawIndexed(ctx->command_buffer, index_count, 1, 0, s*i, 0);
 
 			vkCmdBindPipeline(ctx->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe_pipeline);
-			FS_FOR(mesh_count) vkCmdDrawIndexed(ctx->command_buffer, index_count, 1, 0, 33*33*i, 0);
+			FS_FOR(mesh_count) vkCmdDrawIndexed(ctx->command_buffer, index_count, 1, 0, s*i, 0);
 		}
 		else {
 			vkCmdBindPipeline(ctx->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-			FS_FOR(mesh_count) vkCmdDrawIndexed(ctx->command_buffer, index_count, 1, 0, 33*33*i, 0);
+			FS_FOR(mesh_count) vkCmdDrawIndexed(ctx->command_buffer, index_count, 1, 0, s*i, 0);
 		}
 		
 

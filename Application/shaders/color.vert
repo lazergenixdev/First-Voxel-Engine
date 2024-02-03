@@ -6,7 +6,7 @@ layout (location = 1) out flat vec3 f_color;
 
 layout (push_constant) uniform A {
 	mat4 view_projection;
-//	vec3 chunk_position;
+	float normal;
 } transform;
 
 vec3[8] color_map = vec3[8] (

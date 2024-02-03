@@ -115,12 +115,14 @@ auto Camera_Controller::update(float dt) -> void {
 
 	fs::v3f32 move_speed = {};
 
+	move_mask |= MOVE_FORWARD;
+
 	if (move_mask & MOVE_FORWARD) move_speed.x += 1.0f;
-	if (move_mask & MOVE_BACK) move_speed.x -= 1.0f;
-	if (move_mask & MOVE_RIGHT) move_speed.z -= 1.0f;
-	if (move_mask & MOVE_LEFT) move_speed.z += 1.0f;
-	if (move_mask & MOVE_UP) move_speed.y += 1.0f;
-	if (move_mask & MOVE_DOWN) move_speed.y -= 1.0f;
+	if (move_mask & MOVE_BACK   ) move_speed.x -= 1.0f;
+	if (move_mask & MOVE_RIGHT  ) move_speed.z -= 1.0f;
+	if (move_mask & MOVE_LEFT   ) move_speed.z += 1.0f;
+	if (move_mask & MOVE_UP     ) move_speed.y += 1.0f;
+	if (move_mask & MOVE_DOWN   ) move_speed.y -= 1.0f;
 
 	float speed = engine.modifier_keys & fs::keys::Mod_Control ? 50.0f : 5.0f;
 	auto [forward, left] = get_move_vectors();

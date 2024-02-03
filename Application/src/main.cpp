@@ -16,6 +16,7 @@
 #include <stb_perlin.h>
 #include "mesher.hpp"
 #include "config.hpp"
+#include "job_queue.hpp"
 
 extern void display_fatal_error(const char* title, const char* what);
 extern void generateMipmaps(fs::Graphics& gfx, VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
@@ -216,6 +217,31 @@ struct Rain {
 };
 #endif
 
+struct Thread_Info {
+	std::mutex mutex;
+	std::condition_variable cv;
+	std::vector<Mesh>* meshes;
+	fs::v2f32 offset;
+	World* world;
+	bool alive = true;
+	bool done = false;
+};
+
+void thread_main(Thread_Info* info) {
+	while (info->alive) {
+		{
+			std::unique_lock lock{ info->mutex };
+			info->cv.wait(lock);
+
+			removethis::xoff = info->offset.x;
+			removethis::yoff = info->offset.y;
+			generate_meshes_from_world(*info->world, *info->meshes);
+			info->done = true;
+		}
+		info->cv.notify_one();
+	}
+}
+
 class Game_Scene : public fs::Scene
 {
 public:
@@ -228,6 +254,10 @@ public:
 		rain.create(engine.graphics, outline_technique.render_pass);
 #endif
 		world = std::make_unique<World>();
+		thread_info.meshes = &meshes;
+		thread_info.world = world.get();
+		thread = std::jthread(thread_main, &thread_info);
+	
 		generate_meshes_from_world(*world, meshes);
 		wr.add_meshes(meshes);
 	}
@@ -235,6 +265,8 @@ public:
 #if RAIN
 		rain.destroy(engine.graphics);
 #endif
+		thread_info.alive = false;
+		thread_info.cv.notify_one();
 		wr.destroy();
 		app_load_data::save(camera_controller);
 	//	outline_technique.destroy(engine.graphics);
@@ -282,26 +314,50 @@ public:
 		
 		auto& position = camera_controller.position;
 		fs::u32 changed = 0;
-		if (position.x <-1.0f) { changed |= 1; removethis::xoff -= 1.0f; position.x += 1.0f; }
-		if (position.x > 1.0f) { changed |= 1; removethis::xoff += 1.0f; position.x -= 1.0f; }
-		if (position.z <-1.0f) { changed |= 1; removethis::yoff -= 1.0f; position.z += 1.0f; }
-		if (position.z > 1.0f) { changed |= 1; removethis::yoff += 1.0f; position.z -= 1.0f; }
+		if (position.x <-1.0f) { changed |= 1; offset.x -= 1.0f; }
+		if (position.x > 1.0f) { changed |= 2; offset.x += 1.0f; }
+		if (position.z <-1.0f) { changed |= 4; offset.y -= 1.0f; }
+		if (position.z > 1.0f) { changed |= 8; offset.y += 1.0f; }
 
+#if 0
 		if (changed) {
+			removethis::xoff = offset.x;
+			removethis::yoff = offset.y;
+			generate_meshes_from_world(*world, meshes);
 			wr.vertex_count = 0;
 			wr.mesh_count = 0;
-			generate_meshes_from_world(*world, meshes);
 			wr.add_meshes(meshes);
 		}
+#else
+		if (change != 0 && changed) {
+			std::unique_lock lock{ thread_info.mutex };
+			thread_info.cv.wait_until(lock, nullptr, [&] { return thread_info.done == true; });
+		}
 
-	//	outline_technique.post_fx_enable = post_fx_enable;
-	//	outline_technique.begin(ctx);
+		if (thread_info.done) {
+			std::scoped_lock lock{ thread_info.mutex };
+			if (change & 1) position.x += 1.0f;
+			if (change & 2) position.x -= 1.0f;
+			if (change & 4) position.z += 1.0f;
+			if (change & 8) position.z -= 1.0f;
+			change = 0;
+
+			wr.vertex_count = 0;
+			wr.mesh_count = 0;
+			wr.add_meshes(meshes);
+			thread_info.done = false;
+		}
+		if (changed) {
+			std::scoped_lock lock{ thread_info.mutex };
+			thread_info.offset = offset;
+			thread_info.cv.notify_one();
+			change = changed;
+		}
+#endif
 #if RAIN
 		rain.draw(ctx, camera_controller, dt);
 #endif
 		wr.draw(ctx, camera_controller, wireframe);
-		
-	//	outline_technique.end(ctx);
 
 		auto P = glm::ivec3(glm::floor(camera_controller.position));
 		auto C = camera_controller.get_chunk_position();
@@ -313,10 +369,11 @@ public:
 		auto total_mib = double(total_vertex_gpu_memory)/double(1024*1024);
 		auto usage = double(100 * used_vertex_gpu_memory) / double(total_vertex_gpu_memory);
 		engine.debug_layer.add("GPU memory usage: %.2f%% / %.3f MiB", usage, total_mib);
+		engine.debug_layer.add("render distance: %.0f", world->render_distance);
+		engine.debug_layer.add("offset: %.1f", thread_info.offset.x);
 	}
 
 	virtual void on_resize() override {
-	//	outline_technique.resize(engine.graphics);
 		wr.resize_frame_buffers();
 	}
 private:
@@ -331,9 +388,43 @@ private:
 
 	World_Renderer wr;
 	std::vector<Mesh> meshes;
+
+	Thread_Info thread_info;
+	std::jthread thread;
+
+	fs::v2f32 offset;
+	fs::u32 change = 0;
 };
 
 fs::Scene* on_create_scene(fs::Scene_Key const& key) {
+//	int constexpr N = 1'000'000'000;
+//	std::vector<int> random_array;
+//	random_array.resize(N);
+//	struct Work {
+//		int* dst;
+//		int count;
+//	};
+//	auto generate = [](Work& w) {
+//		FS_FOR (w.count) {
+//			w.dst[i] = rand();
+//		}
+//	};
+//	job_queue<Work> job_queue{8, generate};
+//
+//	double start = fs::timestamp();
+//#if 1
+//	FS_FOR(8) job_queue.add_work(random_array.data() + (i*(N/8)), N/8);
+//	job_queue.wait();
+//#else
+//	FS_FOR(N) random_array.data()[i] = rand();
+//#endif
+//	double time_took = fs::seconds_elasped(start, fs::timestamp());
+//
+//	char buffer[128];
+//	snprintf(buffer, sizeof(buffer), "error: time took: %f\n", time_took);
+//	OutputDebugStringA(buffer);
+//
+//	return nullptr;
 	return new Game_Scene;
 }
 
