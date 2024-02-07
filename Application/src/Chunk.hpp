@@ -2,149 +2,336 @@
 #include "gfx.h"
 #include "Camera_Controller.h"
 #include <stb_perlin.h>
+#include <unordered_map>
+#include <glm/ext/vector_common.hpp>
+#include "blend_technique.hpp"
+#include "Skybox.h"
+
+#define LOBATOMY 0
+
+template <typename T>
+struct r3 {
+	using type = T;
+	using vec  = fs::v3<type>;
+
+	fs::range<type> x, y, z;
+
+	static constexpr vec oct_mask[] = {
+		{0,0,0},
+		{0,0,1},
+		{0,1,0},
+		{0,1,1},
+		{1,0,0},
+		{1,0,1},
+		{1,1,0},
+		{1,1,1},
+	};
+
+	vec constexpr size() const { return vec(x.high - x.low, y.high - y.low, z.high - z.low); }
+
+	static r3 constexpr from_point_size(vec point, vec size) {
+		return r3{ .x = {point.x,point.x + size.x}, .y = {point.y,point.y+size.y}, .z = {point.z,point.z+size.z} };
+	}
+	static r3 constexpr from_center(vec h) {
+		return r3{ .x = {-h.x,h.x}, .y = {-h.y,h.y}, .z = {-h.z,h.z} };
+	}
+
+	vec corner(int index) const { return vec(x.low, y.low, z.low) + size() * oct_mask[index]; }
+};
+
+using r3i = r3<int>;
 
 struct LOD_Tree {
-	LOD_Tree* q00 = nullptr;
-	LOD_Tree* q01 = nullptr;
-	LOD_Tree* q10 = nullptr;
-	LOD_Tree* q11 = nullptr;
-	fs::v2f32 center = {};
+	LOD_Tree* octant[8] = {};
+	r3i d = {};
 	int lod = 0; // LOD of 0 means that there is no chunk here, we are a parent.
 
 	LOD_Tree(int lod) : lod(lod) {}
-	LOD_Tree(int lod, fs::v2f32 center) : lod(lod), center(center) {}
+	LOD_Tree(int lod, r3i d) : lod(lod), d(d) {}
 };
 
-// @TODO: only need a lookup table, no need for switch
-fs::rf32 quadrant(fs::rf32 const& rect, int quadrant) {
-	auto q = rect.size() * 0.25f;
-	auto half = rect.size() * 0.5f;
-	switch (quadrant)
-	{
-	default: /* 0 */ {
-		return fs::rf32::from_topleft(rect.topLeft(), half);
+template <typename T>
+r3<T> octant(r3<T> const& r, int index) {
+	auto half = r.size() / T(2);
+
+	return r3<T>::from_point_size(
+		r3<T>::vec(r.x.low, r.y.low, r.z.low) + half * r3<T>::oct_mask[index],
+		half
+	);
+}
+
+struct Vertex {
+	fs::v3f32 position;
+	float     palette;
+
+	static constexpr float d = (1 << 6);
+
+	Vertex(float x, float y, float z): position(x,y,z), palette(color_from_position(x,y,z)) {}
+	Vertex(float x, float y, float z, float p): position(x,y,z), palette(p) {}
+
+	static float color_from_position(float x, float y, float z) {
+		return stb_perlin_noise3(x / d, y / d, z / d, 0, 0, 0) + 0.6f;
 	}
-	break; case 0b01: {
-		return fs::rf32::from_topleft(rect.topLeft() + fs::v2f32(0.0f, rect.height() * 0.5f), half);
+};
+
+struct Vertex_Buffer {
+	VmaAllocation allocation[2];
+	VkBuffer      buffer[2];
+	void*         gpu_data[2];
+	static int m;
+
+	Vertex_Buffer() {
+		VmaAllocationCreateInfo allocInfo = {};
+		allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+		allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+		VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+		bufferInfo.size = (1 << 12) * sizeof(Vertex);
+		bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+		FS_FOR(2) {
+		auto vkr = vmaCreateBuffer(engine.graphics.allocator, &bufferInfo, &allocInfo, buffer+i, allocation+i, nullptr);
+		if (vkr) __debugbreak();
+		}
+		vmaMapMemory(engine.graphics.allocator, allocation[0], &gpu_data[0]);
+		vmaMapMemory(engine.graphics.allocator, allocation[1], &gpu_data[1]);
 	}
-	break; case 0b10: {
-		return fs::rf32::from_topleft(rect.topLeft() + fs::v2f32(rect.width() * 0.5f, 0.0f), half);
+	~Vertex_Buffer() {
+		vmaUnmapMemory(engine.graphics.allocator, allocation[0]);
+		vmaUnmapMemory(engine.graphics.allocator, allocation[1]);
+		if (allocation) {
+			vmaDestroyBuffer(engine.graphics.allocator, buffer[0], allocation[0]);
+			vmaDestroyBuffer(engine.graphics.allocator, buffer[1], allocation[1]);
+		}
 	}
-	break; case 0b11: {
-		return fs::rf32::from_topleft(rect.topLeft() + rect.size() * 0.5f, half);
+
+	Vertex_Buffer(Vertex_Buffer const&) = delete;
+	Vertex_Buffer(Vertex_Buffer&& v) noexcept {
+		allocation[0] = v.allocation[0];
+		allocation[1] = v.allocation[1];
+		buffer[0] = v.buffer[0];
+		buffer[1] = v.buffer[1];
+		v.allocation[0] = nullptr;
+		v.buffer    [0] = nullptr;
+		v.allocation[1] = nullptr;
+		v.buffer    [1] = nullptr;
 	}
-	break;
+
+	void send(Vertex* data, uint32_t count) {
+		fs::u64 size = sizeof(Vertex) * count;
+		memcpy(gpu_data[m], data, size);
+		vmaFlushAllocation(engine.graphics.allocator, allocation[m], 0, size);
 	}
+	
+	VkBuffer* get() {
+		return buffer+m;
+	}
+};
+
+inline int Vertex_Buffer::m = 0;
+
+struct Chunk {
+	int lod;
+	int quad_count;
+	fs::v3s32 pos;
+	int vertex_buffer;
+};
+
+template <>
+struct std::hash<fs::v3<int>> {
+	_NODISCARD size_t operator()(const fs::v3<int>& _Keyval) const noexcept {
+		return
+			static_cast<size_t>(_Keyval.x)
+		+	static_cast<size_t>(_Keyval.y)
+		+	static_cast<size_t>(_Keyval.z)
+		;
+	}
+};
+
+namespace {
+//	std::unordered_map<fs::v3<int>, Chunk> loaded_chunks;
+	std::vector<Chunk>         loaded_chunks;
+	std::vector<Vertex_Buffer> vertex_buffers;
+}
+
+float sdBox(glm::vec3 p, glm::vec3 b)
+{
+	glm::vec3 q = abs(p) - b;
+	return glm::length(glm::max(q, 0.0f)) + glm::min(glm::max(q.x, glm::max(q.y, q.z)), 0.0f);
 }
 
 struct World {
-	float render_distance;
-	LOD_Tree* root;
+	using Node = LOD_Tree;
 
-	World() {
-		using namespace fs;
-		root = new LOD_Tree(0);
-		int max_lod = 8;
-		render_distance = float((8) << max_lod);
+	int max_lod = 4;
+	float render_distance = float((8) << max_lod);
+	Node* root;
 
-		auto generate_lod_sub_tree = [](LOD_Tree* node, rf32 rect, int max, int offset) {
-			auto p = reinterpret_cast<LOD_Tree**>(node);
-			for (int i = 1; i <= max; ++i) {
-				for (auto k = 0; k < 4; ++k) {
-					if (k == offset) continue;
-					p[k] = new LOD_Tree(i, quadrant(rect, k).center());
-				}
-				p[offset] = new LOD_Tree((i == max)*max, quadrant(rect, offset).center());
-				p = reinterpret_cast<LOD_Tree**>(p[offset]);
-				rect = quadrant(rect, offset);
+	fs::v3f32 center = {};
+
+	Node* start;
+	Node* next;
+	Node* end;
+
+	auto build_lod_tree(r3i d, int height) -> Node* {
+		auto node = new(next++) Node(0);
+		node->d = d;
+
+	//	int64_t min = INT64_MAX;
+	//	FS_FOR(8) {
+	//		auto dist = (fs::v3s64(d.corner(i)) - center).lensq();
+	//		if (dist < min) min = dist;
+	//	}
+	//	float dist = std::sqrtf(float(min));
+		float x0 = fs::lerp(float(d.x.low), float(d.x.high), 0.5f);
+		float y0 = fs::lerp(float(d.y.low), float(d.y.high), 0.5f);
+		float z0 = fs::lerp(float(d.z.low), float(d.z.high), 0.5f);
+
+	//	float dist = glm::length(glm::vec3(center.x,center.y,center.z) - glm::vec3(x0,y0,z0));
+		float dist = sdBox(
+			glm::vec3(center.x,center.y,center.z)
+		-	glm::vec3(x0,y0,z0)
+			, glm::vec3(
+			float(d.x.difference()) * 0.5f,
+			float(d.y.difference()) * 0.5f,
+			float(d.z.difference()) * 0.5f
+		));
+
+		if ((lod_from_distance(dist) > height && height < 5)
+			//	|| height < 3
+			) {
+			FS_FOR(8) {
+				auto g = octant(d, i);
+				node->octant[i] = build_lod_tree(g, height + 1);
 			}
-		};
-
-		auto base = rf32::from_center(2.0f*render_distance, 2.0f*render_distance);
-
-		generate_lod_sub_tree(root->q00 = new LOD_Tree(0), quadrant(base, 0b00), max_lod, 0b11);
-		generate_lod_sub_tree(root->q01 = new LOD_Tree(0), quadrant(base, 0b01), max_lod, 0b10);
-		generate_lod_sub_tree(root->q10 = new LOD_Tree(0), quadrant(base, 0b10), max_lod, 0b01);
-		generate_lod_sub_tree(root->q11 = new LOD_Tree(0), quadrant(base, 0b11), max_lod, 0b00);
-
-	//	fix_lod(root, 4);
-	}
-
-	auto constexpr lod_from_distance(float dist) -> int {
-		return int(dist) >> 8;
-	}
-
-	auto fix_lod(LOD_Tree* node, int min_lod) -> void {
-		if (node == nullptr) return;
-		auto lod = node->lod;
-		if (lod != 0 && lod < min_lod) {
-			node->lod = 0;
-			float size = render_distance / float(1 << lod);
-			fs::rf32 rect = fs::rf32::from_center(node->center, size, size);
-			node->q00 = new LOD_Tree(lod+1, quadrant(rect, 0b00).center());
-			node->q01 = new LOD_Tree(lod+1, quadrant(rect, 0b01).center());
-			node->q10 = new LOD_Tree(lod+1, quadrant(rect, 0b10).center());
-			node->q11 = new LOD_Tree(lod+1, quadrant(rect, 0b11).center());
+			//	node->lod = height;
 		}
-		fix_lod(node->q00, min_lod);
-		fix_lod(node->q01, min_lod);
-		fix_lod(node->q10, min_lod);
-		fix_lod(node->q11, min_lod);
-	}
-};
-
-struct Mesh {
-	struct vertex {
-		fs::v3f32 position;
+		else node->lod = height;
+		return node;
 	};
 
-	std::vector<vertex> vertex_array;
+	World() {
+		start = (Node*)malloc(sizeof(Node) * 2048);
+		end = start + 2048;
+	}
+
+	void generate_lod_tree() {
+		next = start;
+		auto rd = int(render_distance);
+		auto r = r3i::from_center(r3i::vec(rd));
+		root = new(next++) Node(0);
+		FS_FOR(8) root->octant[i] = build_lod_tree(octant(r,i), 1);
+	}
+
+	auto lod_from_distance(float dist) -> int {
+	//	return (max_lod+1) - (int(dist) >> 4);
+	//	return int(float(max_lod+1) - (dist / 32.0f));
+	
+		if (dist <  32.0f) return 5;
+		if (dist <  64.0f) return 4;
+		if (dist < 128.0f) return 3;
+		if (dist < 256.0f) return 2;
+		return 1;
+	}
 };
 
-namespace removethis {
-	inline float xoff = 0.0f;
-	inline float yoff = 0.0f;
-}
-float height_map(float x, float y) {
-	return 3.0f * stb_perlin_fbm_noise3((x + removethis::xoff)*0.10346f, (y + removethis::yoff)*0.10346f, 0.0f, 2.0f, 0.5f, 8);
-//	return 4.0f * stb_perlin_noise3((x + removethis::xoff)*0.10346f, (y + removethis::yoff)*0.10346f, 0.0f, 0, 0, 0);
-}
-
-static constexpr int Vc = 32;
-
-void generate_mesh(Mesh& m, fs::v2f32 center, int lod, float rd) {
+void generate_mesh(fs::v2f32 center, int lod, float rd) {
 	float size = rd / float(1 << lod);
 	fs::rf32 rect = fs::rf32::from_center(center, size, size);
-
-	m.vertex_array.clear();
-	m.vertex_array.reserve((Vc+1)*(Vc+1));
-
-	for (int y = 0; y < Vc+1; ++y)
-	for (int x = 0; x < Vc+1; ++x) {
-		float xx = fs::lerp(rect.x.low, rect.x.high, float(x)/float(Vc));
-		float yy = fs::lerp(rect.y.low, rect.y.high, float(y)/float(Vc));
-
-		m.vertex_array.emplace_back(Mesh::vertex{ .position = {xx,height_map(xx, yy),yy} });
-	}
 }
 
-void recursive_gen(std::vector<Mesh>& out, int& i, LOD_Tree* node, float rd) {
+inline std::vector<Vertex> V;
+
+void recursive_gen(int& k, World::Node* node, float rd) {
 	if (node == nullptr) return;
 	if (node->lod != 0) {
-		generate_mesh(out[i++], node->center, node->lod, rd);
+		auto r = node->d;
+	//
+	//	auto L = (8 << 5) / (1 << node->lod);
+	//
+		uint8_t blocks[8*8*8];
+		for (int z = 0; z < 8; ++z)
+		for (int y = 0; y < 8; ++y)
+		for (int x = 0; x < 8; ++x) {
+			float x0 = fs::lerp(float(r.x.low), float(r.x.high), (float(x)+0.5f)/8.0f);
+			float y0 = fs::lerp(float(r.y.low), float(r.y.high), (float(y)+0.5f)/8.0f);
+			float z0 = fs::lerp(float(r.z.low), float(r.z.high), (float(z)+0.5f)/8.0f);
+			
+		//	auto w = stb_perlin_noise3(x0/Vertex::d,-y0/Vertex::d, z0/Vertex::d, 0, 0, 0);
+		//	blocks[z*8*8+y*8+x] = uint8_t(w < 0.1f);
+			auto w = stb_perlin_ridge_noise3(x0/Vertex::d,-y0/Vertex::d, z0/Vertex::d, 2.0f, 0.5f, 1.0f, 2);
+			blocks[z*8*8+y*8+x] = uint8_t(w < 0.4f);
+		}
+
+		V.clear();
+		for (int z = 0; z < 8; ++z)
+		for (int y = 0; y < 8; ++y)
+		for (int x = 0; x < 8; ++x) {
+			uint8_t b = blocks[z*8*8+y*8+x];
+			if (b) {
+				float x0 = fs::lerp(float(r.x.low), float(r.x.high), float(x  )/8.0f);
+				float x1 = fs::lerp(float(r.x.low), float(r.x.high), float(x+1)/8.0f);
+				float y0 = fs::lerp(float(r.y.low), float(r.y.high), float(y  )/8.0f);
+				float y1 = fs::lerp(float(r.y.low), float(r.y.high), float(y+1)/8.0f);
+				float z0 = fs::lerp(float(r.z.low), float(r.z.high), float(z  )/8.0f);
+				float z1 = fs::lerp(float(r.z.low), float(r.z.high), float(z+1)/8.0f);
+
+				float p = Vertex::color_from_position(0.5f*(x0 + x1),0.5f*(y0 + y1),0.5f*(z0 + z1));
+
+				if (x == 0 || (x > 0 && !blocks[z*8*8+y*8+(x-1)])) {
+					V.emplace_back(x0, y0, z0, p);
+					V.emplace_back(x0, y0, z1, p);
+					V.emplace_back(x0, y1, z0, p);
+					V.emplace_back(x0, y1, z1, p);
+				}
+				if (x == 7 || (x < 7 && !blocks[z*8*8+y*8+(x+1)])) {
+					V.emplace_back(x1, y0, z0, p);
+					V.emplace_back(x1, y0, z1, p);
+					V.emplace_back(x1, y1, z0, p);
+					V.emplace_back(x1, y1, z1, p);
+				}
+				if (y == 0 || (y > 0 && !blocks[z*8*8+(y-1)*8+x])) {
+					V.emplace_back(x0, y0, z0, p);
+					V.emplace_back(x0, y0, z1, p);
+					V.emplace_back(x1, y0, z0, p);
+					V.emplace_back(x1, y0, z1, p);
+				}
+				if (y == 7 || (y < 7 && !blocks[z*8*8+(y+1)*8+x])) {
+					V.emplace_back(x0, y1, z0, p);
+					V.emplace_back(x0, y1, z1, p);
+					V.emplace_back(x1, y1, z0, p);
+					V.emplace_back(x1, y1, z1, p);
+				}
+				if (z == 0 || (z > 0 && !blocks[(z-1)*8*8+y*8+x])) {
+					V.emplace_back(x0, y0, z0, p);
+					V.emplace_back(x0, y1, z0, p);
+					V.emplace_back(x1, y0, z0, p);
+					V.emplace_back(x1, y1, z0, p);
+				}
+				if (z == 7 || (z < 7 && !blocks[(z+1)*8*8+y*8+x])) {
+					V.emplace_back(x0, y0, z1, p);
+					V.emplace_back(x0, y1, z1, p);
+					V.emplace_back(x1, y0, z1, p);
+					V.emplace_back(x1, y1, z1, p);
+				}
+			}
+		}
+
+		if (V.size()) {
+			auto& vb = vertex_buffers[k];
+			vb.send(V.data(), (uint32_t)V.size());
+			Chunk c;
+			c.lod = 0;
+			c.quad_count = int(V.size()) / 4;
+			c.vertex_buffer = k++;
+			c.pos = r.corner(0) + r.size()/2;
+			loaded_chunks.emplace_back(c);
+		}
 	}
-	recursive_gen(out, i, node->q00, rd);
-	recursive_gen(out, i, node->q01, rd);
-	recursive_gen(out, i, node->q10, rd);
-	recursive_gen(out, i, node->q11, rd);
+	else FS_FOR(8) recursive_gen(k, node->octant[i], rd);
 }
 
-void generate_meshes_from_world(World const& w, std::vector<Mesh>& out) {
-	out.clear();
-	out.resize(1<<14);
+void generate_meshes_from_world(World const& w) {
 	int i = 0;
-	recursive_gen(out, i, w.root, w.render_distance);
-	out.resize(i);
+	recursive_gen(i, w.root, w.render_distance);
 }
 
 struct World_Renderer {
@@ -158,8 +345,6 @@ struct World_Renderer {
 
 	VmaAllocation index_allocation;
 	VkBuffer      index_buffer;
-	VmaAllocation vertex_allocation;
-	VkBuffer      vertex_buffer;
 
 	VkImageView   depth_view;
 	gfx::Image    depth_image;
@@ -168,6 +353,10 @@ struct World_Renderer {
 	gfx::Image    color_image;
 
 	VkFramebuffer frame_buffers[fs::Graphics::max_sc_images];
+
+	Blend_Technique blend;
+
+	Skybox skybox;
 
 	struct vert_shader {
 #include "../shaders/color.vert.inl"
@@ -180,10 +369,6 @@ struct World_Renderer {
 		glm::mat4 view_projection;
 		float normal = 1.0f;
 	};
-
-	uint32_t index_count = 0;
-	uint32_t vertex_count = 0;
-	uint32_t mesh_count = 0;
 
 	void create() {
 		auto& gfx = engine.graphics;
@@ -232,8 +417,16 @@ struct World_Renderer {
 		auto vs = fs::create_shader(gfx.device, vert_shader::size, vert_shader::data);
 		auto fs = fs::create_shader(gfx.device, frag_shader::size, frag_shader::data);
 
-		vk::Basic_Vertex_Input<fs::v3f32> vi;
-		auto pipeline_creator = Pipeline_Creator{ render_pass, pipeline_layout }
+		auto rp = render_pass.handle;
+#if LOBATOMY
+		blend.create();
+		rp = blend.render_pass;
+#endif
+
+		skybox.create(engine.graphics, rp);
+
+		vk::Basic_Vertex_Input<fs::v4f32> vi;
+		auto pipeline_creator = Pipeline_Creator{ rp, pipeline_layout }
 			.add_shader(VK_SHADER_STAGE_VERTEX_BIT, vs)
 			.add_shader(VK_SHADER_STAGE_FRAGMENT_BIT, fs)
 			.vertex_input(&vi)
@@ -252,43 +445,26 @@ struct World_Renderer {
 		pipeline_creator.rasterization_state.polygonMode = VK_POLYGON_MODE_LINE;
 		pipeline_creator.create_and_destroy_shaders(&wireframe_pipeline);
 
+		uint32_t constexpr index_count = (1 << 15) * 3;
 		{
 			VmaAllocationCreateInfo allocInfo = {};
 			allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 			allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 			VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-
-			bufferInfo.size = (1 << 20) * sizeof(fs::v3f32);
-			bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-			vmaCreateBuffer(gfx.allocator, &bufferInfo, &allocInfo, &vertex_buffer, &vertex_allocation, nullptr);
-
-			bufferInfo.size = (1 << 15) * sizeof(fs::u32);
+			bufferInfo.size = index_count * sizeof(fs::u16);
 			bufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
 			vmaCreateBuffer(gfx.allocator, &bufferInfo, &allocInfo, &index_buffer, &index_allocation, nullptr);
 		}
 		{
-			std::vector<fs::u32> index_array;
-			int w = Vc+1, h = Vc+1;
-			for (int y = 0; y < h - 1; ++y)
-			for (int x = 0; x < w - 1; ++x) {
-				auto i = y * w + x;
-				index_array.emplace_back(i);
-				index_array.emplace_back(i + 1);
-				index_array.emplace_back(i + w);
-				index_array.emplace_back(i + 1);
-				index_array.emplace_back(i + w + 1);
-				index_array.emplace_back(i + w);
-			}
-
-			uint32_t* gpu_index_buffer;
+			fs::u16 index_array[] = { 0, 1, 2, 2, 3, 1 };
+			uint16_t* gpu_index_buffer;
 			vmaMapMemory(engine.graphics.allocator, index_allocation, (void**)&gpu_index_buffer);
-			for (auto&& i : index_array) gpu_index_buffer[index_count++] = i;
+			FS_FOR(index_count / 6) for (int k = 0; k < 6; ++k) gpu_index_buffer[i*6+k] = index_array[k] + i*4;
 			vmaUnmapMemory(engine.graphics.allocator, index_allocation);
 			vmaFlushAllocation(engine.graphics.allocator, index_allocation, 0, sizeof(fs::u16) * index_count);
 		}
 	}
 	void destroy() {
-		vmaDestroyBuffer(engine.graphics.allocator, vertex_buffer, vertex_allocation);
 		vmaDestroyBuffer(engine.graphics.allocator, index_buffer, index_allocation);
 		vkDestroyPipelineLayout(engine.graphics.device, pipeline_layout, nullptr);
 		vkDestroyPipeline(engine.graphics.device, pipeline, nullptr);
@@ -299,6 +475,11 @@ struct World_Renderer {
 		FS_FOR(engine.graphics.sc_image_count)
 			vkDestroyFramebuffer(engine.graphics.device, frame_buffers[i], nullptr);
 		render_pass.destroy();
+		vertex_buffers.clear();
+#if LOBATOMY
+		blend.destroy();
+#endif
+		skybox.destroy(engine.graphics);
 	}
 	void resize_frame_buffers() {
 		auto& gfx = engine.graphics;
@@ -337,25 +518,16 @@ struct World_Renderer {
 				vkCreateFramebuffer(gfx.device, &framebufferInfo, nullptr, frame_buffers + i);
 			}
 		}
+
+#if LOBATOMY
+		blend.resize();
+#endif
 	}
 
-	void add_meshes(std::vector<Mesh>& meshes) {
-		using vertex = Mesh::vertex;
-		vertex   *gpu_vertex_buffer;
-		
-		vmaMapMemory(engine.graphics.allocator, vertex_allocation, (void**)&gpu_vertex_buffer);
-		vertex_count = 0;
-		for (auto&& m: meshes) {
-			uint32_t count = m.vertex_array.size();
-			memcpy(gpu_vertex_buffer + vertex_count, m.vertex_array.data(), sizeof(vertex)*count);
-			vertex_count += count;
-			mesh_count += 1;
-		}
-		vmaUnmapMemory(engine.graphics.allocator, vertex_allocation);
-		vmaFlushAllocation(engine.graphics.allocator, vertex_allocation, 0, sizeof(vertex)*vertex_count);
-	}
-
-	void draw(fs::Render_Context* ctx, Camera_Controller const& cc, bool wireframe) {
+	void draw(fs::Render_Context* ctx, Camera_Controller const& cc, float dt, bool wireframe, bool wireframe_depth) {
+#if LOBATOMY
+		blend.begin(ctx);
+#else
 		VkClearValue clear_values[3];
 		clear_values[0].color = {};
 		clear_values[1].depthStencil.depth = 1.0f;
@@ -367,10 +539,8 @@ struct World_Renderer {
 		render_pass_begin_info.renderArea = { .offset = {}, .extent = ctx->gfx->sc_extent };
 		render_pass_begin_info.renderPass = render_pass;
 		vkCmdBeginRenderPass(ctx->command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
-
-		vkCmdBindIndexBuffer(ctx->command_buffer, index_buffer, 0, VK_INDEX_TYPE_UINT32);
-		VkDeviceSize offset = 0;
-		vkCmdBindVertexBuffers(ctx->command_buffer, 0, 1, &vertex_buffer, &offset);
+#endif
+		vkCmdBindIndexBuffer(ctx->command_buffer, index_buffer, 0, VK_INDEX_TYPE_UINT16);
 
 		VkViewport viewport{};
 		viewport.x = 0.0f;
@@ -390,21 +560,57 @@ struct World_Renderer {
 		td.normal = wireframe ? 1.0f : 1.0f;
 		vkCmdPushConstants(ctx->command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(td), &td);
 
-		uint32_t s = (Vc+1)*(Vc+1);
+		auto p = (fs::v3s32)fs::v3f32::from(cc.position);
+
+		std::sort(loaded_chunks.begin(), loaded_chunks.end(), [&](Chunk const& l, Chunk const& r) {
+			auto dl = (l.pos - p).lensq();
+			auto dr = (r.pos - p).lensq();
+			return dl < dr;
+		});
+
+		int max_quad_count = 0;
+
 		if (wireframe) {
-			vkCmdBindPipeline(ctx->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_pipeline);
-			FS_FOR(mesh_count) vkCmdDrawIndexed(ctx->command_buffer, index_count, 1, 0, s*i, 0);
-
+			if (wireframe_depth) {
+				vkCmdBindPipeline(ctx->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_pipeline);
+				for (auto&& chunk: loaded_chunks) {
+					VkDeviceSize offset = 0;
+					vkCmdBindVertexBuffers(ctx->command_buffer, 0, 1, vertex_buffers[chunk.vertex_buffer].get(), &offset);
+					vkCmdDrawIndexed(ctx->command_buffer, chunk.quad_count*6, 1, 0, 0, 0);
+				}
+			}
+			
 			vkCmdBindPipeline(ctx->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe_pipeline);
-			FS_FOR(mesh_count) vkCmdDrawIndexed(ctx->command_buffer, index_count, 1, 0, s*i, 0);
+			for (auto&& chunk: loaded_chunks) {
+				VkDeviceSize offset = 0;
+				vkCmdBindVertexBuffers(ctx->command_buffer, 0, 1, vertex_buffers[chunk.vertex_buffer].get(), &offset);
+				vkCmdDrawIndexed(ctx->command_buffer, chunk.quad_count*6, 1, 0, 0, 0);
+				if (chunk.quad_count > max_quad_count) max_quad_count = chunk.quad_count;
+			}
 		}
-		else {
+		else
+		{
 			vkCmdBindPipeline(ctx->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-			FS_FOR(mesh_count) vkCmdDrawIndexed(ctx->command_buffer, index_count, 1, 0, s*i, 0);
+			for (auto&& chunk: loaded_chunks) {
+				VkDeviceSize offset = 0;
+				vkCmdBindVertexBuffers(ctx->command_buffer, 0, 1, vertex_buffers[chunk.vertex_buffer].get(), &offset);
+				vkCmdDrawIndexed(ctx->command_buffer, chunk.quad_count*6, 1, 0, 0, 0);
+				if (chunk.quad_count > max_quad_count) max_quad_count = chunk.quad_count;
+			}
 		}
-		
 
-		engine.debug_layer.add("i: %i, V: %i", index_count, vertex_count);
+#if !LOBATOMY
+	//	auto view_projection = cc.get_skybox_transform();
+	//	skybox.draw(ctx, &view_projection);
+#endif
+
+		engine.debug_layer.add("chunk count: %i", loaded_chunks.size());
+		engine.debug_layer.add("max chunk quad count: %i", max_quad_count);
+
+#if LOBATOMY
+		blend.end(dt, ctx, 0.9f);
+#else
 		render_pass.end(ctx);
+#endif
 	}
 };

@@ -10,18 +10,18 @@ layout (push_constant) uniform A {
 } u;
 
 void main() {
-    vec3 normal = normalize(cross(dFdx(position), dFdy(position)));
+//  vec3 normal = normalize(cross(dFdx(position), dFdy(position)));
 
 //  fragColor = vec4(normal, 1.0);
 //  fragColor = vec4(color * dot(normal,vec3(0.0,1.0,0.0)), 1.0);
-//  fragColor = vec4(color, 1.0);
+    fragColor = vec4(color, 1.0);
 
 #if 0
     fragColor = vec4(vec3(dot(normal,vec3(0.0,1.0,0.0))), 1.0);
-#elif 1
+#elif 0
     vec3 h = vec3(position.y*0.2 + 0.5);
     fragColor = vec4(h*max(u.normal,dot(normal,vec3(0.0,1.0,0.0))), 1.0);
-#else
+#elif 0
     fragColor = vec4(1.0);
 #endif
 }

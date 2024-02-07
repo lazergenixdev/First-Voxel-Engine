@@ -26,14 +26,15 @@ auto Skybox::create(fs::Graphics& gfx, VkRenderPass in_render_pass) -> void {
 		.create(&pipeline_layout);
 
 	auto vertex_input = VkPipelineVertexInputStateCreateInfo{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
-	Pipeline_Creator{ in_render_pass, pipeline_layout }
+	auto pc = Pipeline_Creator{ in_render_pass, pipeline_layout }
 		.add_shader(VK_SHADER_STAGE_VERTEX_BIT, fs::create_shader(gfx.device, vert::size, vert::data))
 		.add_shader(VK_SHADER_STAGE_FRAGMENT_BIT, fs::create_shader(gfx.device, frag::size, frag::data))
 		.vertex_input(&vertex_input)
 		.add_dynamic_state(VK_DYNAMIC_STATE_VIEWPORT)
-		.add_dynamic_state(VK_DYNAMIC_STATE_SCISSOR)
-		.create_and_destroy_shaders(&pipeline);
+		.add_dynamic_state(VK_DYNAMIC_STATE_SCISSOR);
 	//	pc.blend_attachment.blendEnable = VK_FALSE;
+	pc.multisample_state.rasterizationSamples = VK_SAMPLE_COUNT_8_BIT;
+	pc.create_and_destroy_shaders(&pipeline);
 
 	auto format = VK_FORMAT_R8G8B8A8_UNORM;
 	{

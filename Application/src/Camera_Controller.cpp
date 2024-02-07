@@ -50,14 +50,14 @@ auto Camera_Controller::get_transform() const -> glm::mat4 {
 
 auto Camera_Controller::get_skybox_transform() const -> glm::mat4
 {
-	glm::mat4 Projection = glm::perspectiveLH_NO(field_of_view, 16.0f / 9.0f, 0.025f, 100.f);
+	glm::mat4 Projection = glm::perspectiveLH_NO(field_of_view, 16.0f / 9.0f, 0.025f, 1000.f);
 	glm::vec3 center = get_view_direction();
 	glm::vec3 eye = { 0.0f, 0.0f, 0.0f };
 	glm::vec3 up = { 0.0f, 1.0f, 0.0f };
 	return { glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f))
 	* Projection
 	* glm::lookAtLH(eye, center, up)
-	* glm::scale(glm::mat4(1.0f), glm::vec3(50.0f, 50.0f, 50.0f))
+	* glm::scale(glm::mat4(1.0f), glm::vec3(400.0f, 400.0f, 400.0f))
 	};
 }
 
@@ -115,7 +115,7 @@ auto Camera_Controller::update(float dt) -> void {
 
 	fs::v3f32 move_speed = {};
 
-	move_mask |= MOVE_FORWARD;
+//	move_mask |= MOVE_FORWARD;
 
 	if (move_mask & MOVE_FORWARD) move_speed.x += 1.0f;
 	if (move_mask & MOVE_BACK   ) move_speed.x -= 1.0f;
@@ -128,8 +128,8 @@ auto Camera_Controller::update(float dt) -> void {
 	auto [forward, left] = get_move_vectors();
 	auto up = glm::vec3(0.0f, 1.0f, 0.0f);
 	position += forward * move_speed.x * speed * dt;
-	position += left * move_speed.z * speed * dt;
-	position += up * move_speed.y * speed * dt;
+	position += left    * move_speed.z * speed * dt;
+	position += up      * move_speed.y * speed * dt;
 
 	auto v = get_view_direction();
 	engine.debug_layer.add("view dir: %.1f,%.1f,%.1f", v.x, v.y, v.z);
