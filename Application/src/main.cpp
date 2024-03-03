@@ -217,10 +217,13 @@ public:
 		rain.create(engine.graphics, outline_technique.render_pass);
 #endif
 		world = std::make_unique<World>();
-		vertex_buffers.resize(1 << 13);
-		V.reserve(1 << 14);
 
 	//	skybox.create(engine.graphics, wr.render_pass);
+
+		loaded_chunks.clear();
+		world->center = {};
+		world->generate_lod_tree();
+		generate_meshes_from_world(*world);
 	}
 	virtual ~Game_Scene() override {
 #if RAIN
@@ -231,6 +234,30 @@ public:
 	//	outline_technique.destroy(engine.graphics);
 
 	//	skybox.destroy(engine.graphics);
+	}
+
+	void update() {
+		for (auto&& [id, chunk] : loaded_chunks) {
+			chunk.status = 0;
+		}
+		world->generate_lod_tree();
+
+		generate_meshes_from_world(*world);
+
+		for (auto it = loaded_chunks.begin(); it != loaded_chunks.end();) {
+			auto const& [id, chunk] = *it;
+
+			if (chunk.status == 0) {
+				if (chunk.vertex_buffer >= 0) {
+					free_vertex_buffers.emplace_back(chunk.vertex_buffer);
+				}
+				loaded_chunks.erase(it);
+				it = loaded_chunks.begin();
+			}
+			else ++it;
+		}
+
+	//	job_q.wait();
 	}
 
 	void handle_event(fs::Event const& e) {
@@ -251,6 +278,10 @@ public:
 				post_fx_enable = !post_fx_enable;
 			else if (e.key_down.key_id == fs::keys::J)
 				wireframe_depth = !wireframe_depth;
+			else if (e.key_down.key_id == fs::keys::R) {
+				loaded_chunks.clear();
+				update();
+			}
 		}
 		break; case fs::Event_Key_Up: {
 			if (e.key_down.key_id == fs::keys::Escape)
@@ -272,14 +303,9 @@ public:
 		auto P = camera_controller.position;
 		static glm::vec3 Pp;
 		if (P != Pp) {
+			world->center = v3f32::from(P);
+			update();
 			Pp = P;
-			Vertex_Buffer::m = (Vertex_Buffer::m == 0) ? 1 : 0;
-			loaded_chunks.clear();
-			{
-				world->center = { P.x, P.y, P.z };
-			}
-			world->generate_lod_tree();
-			generate_meshes_from_world(*world);
 		}
 
 		wr.draw(ctx, camera_controller, dt, wireframe, wireframe_depth);
@@ -292,7 +318,7 @@ public:
 		engine.debug_layer.add("render wireframe: %s", FS_BTF(wireframe));
 		float FOV = camera_controller.field_of_view;
 		engine.debug_layer.add("FOV: %.2f (%.1f deg)", FOV, FOV * (360.0f/float(FS_TAU)));
-		engine.debug_layer.add("number of quads: %i", total_number_of_quads);
+	//	engine.debug_layer.add("number of quads: %i", total_number_of_quads);
 		auto total_mib = double(total_vertex_gpu_memory)/double(1024*1024);
 		auto usage = double(100 * used_vertex_gpu_memory) / double(total_vertex_gpu_memory);
 		engine.debug_layer.add("GPU memory usage: %.2f%% / %.3f MiB", usage, total_mib);

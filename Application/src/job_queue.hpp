@@ -1,7 +1,9 @@
+#pragma once
 #include <thread>
 #include <condition_variable>
 #include <vector>
 #include <type_traits>
+#include <intrin.h>
 
 template <typename Work>
 struct job_queue {

@@ -6,6 +6,8 @@
 #include <glm/ext/vector_common.hpp>
 #include "blend_technique.hpp"
 #include "Skybox.h"
+#include "job_queue.hpp"
+#include "config.hpp"
 
 #define LOBATOMY 0
 
@@ -37,6 +39,7 @@ struct r3 {
 	}
 
 	vec corner(int index) const { return vec(x.low, y.low, z.low) + size() * oct_mask[index]; }
+	vec pos() const { return vec(x.low, y.low, z.low); }
 };
 
 using r3i = r3<int>;
@@ -64,96 +67,117 @@ struct Vertex {
 	fs::v3f32 position;
 	float     palette;
 
-	static constexpr float d = (1 << 6);
+	static constexpr float d = (1 << 8);
 
 	Vertex(float x, float y, float z): position(x,y,z), palette(color_from_position(x,y,z)) {}
 	Vertex(float x, float y, float z, float p): position(x,y,z), palette(p) {}
 
 	static float color_from_position(float x, float y, float z) {
-		return stb_perlin_noise3(x / d, y / d, z / d, 0, 0, 0) + 0.6f;
+	//	return stb_perlin_noise3(x / d, y / d, z / d, 0, 0, 0) + 0.6f;
+		return stb_perlin_noise3(2.0f*x / d, 2.0f*y / d, 2.0f*z / d, 0, 0, 0) + 0.6f;
+	//	return y/256.0f;
 	}
 };
 
+inline int max_vertex_count = 0;
+
 struct Vertex_Buffer {
-	VmaAllocation allocation[2];
-	VkBuffer      buffer[2];
-	void*         gpu_data[2];
-	static int m;
+	VmaAllocation allocation;
+	VkBuffer      buffer;
+	void*         gpu_data;
+	void*         cpu_data;
+	VkDeviceSize  dirty_size = 0;
+	unsigned int  index_count = 0;
 
 	Vertex_Buffer() {
 		VmaAllocationCreateInfo allocInfo = {};
 		allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
 		allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 		VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-		bufferInfo.size = (1 << 12) * sizeof(Vertex);
+		bufferInfo.size = (1 << 15) * sizeof(Vertex);
 		bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-		FS_FOR(2) {
-		auto vkr = vmaCreateBuffer(engine.graphics.allocator, &bufferInfo, &allocInfo, buffer+i, allocation+i, nullptr);
+		auto vkr = vmaCreateBuffer(engine.graphics.allocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr);
 		if (vkr) __debugbreak();
-		}
-		vmaMapMemory(engine.graphics.allocator, allocation[0], &gpu_data[0]);
-		vmaMapMemory(engine.graphics.allocator, allocation[1], &gpu_data[1]);
+		vmaMapMemory(engine.graphics.allocator, allocation, &gpu_data);
+		cpu_data = new fs::byte[bufferInfo.size];
+		total_vertex_gpu_memory += bufferInfo.size;
 	}
 	~Vertex_Buffer() {
-		vmaUnmapMemory(engine.graphics.allocator, allocation[0]);
-		vmaUnmapMemory(engine.graphics.allocator, allocation[1]);
 		if (allocation) {
-			vmaDestroyBuffer(engine.graphics.allocator, buffer[0], allocation[0]);
-			vmaDestroyBuffer(engine.graphics.allocator, buffer[1], allocation[1]);
+			vmaUnmapMemory(engine.graphics.allocator, allocation);
+			vmaDestroyBuffer(engine.graphics.allocator, buffer, allocation);
 		}
 	}
 
 	Vertex_Buffer(Vertex_Buffer const&) = delete;
 	Vertex_Buffer(Vertex_Buffer&& v) noexcept {
-		allocation[0] = v.allocation[0];
-		allocation[1] = v.allocation[1];
-		buffer[0] = v.buffer[0];
-		buffer[1] = v.buffer[1];
-		v.allocation[0] = nullptr;
-		v.buffer    [0] = nullptr;
-		v.allocation[1] = nullptr;
-		v.buffer    [1] = nullptr;
+		allocation = v.allocation;
+		buffer = v.buffer;
+		v.allocation = nullptr;
+		v.buffer     = nullptr;
 	}
 
 	void send(Vertex* data, uint32_t count) {
-		fs::u64 size = sizeof(Vertex) * count;
-		memcpy(gpu_data[m], data, size);
-		vmaFlushAllocation(engine.graphics.allocator, allocation[m], 0, size);
+		dirty_size = sizeof(Vertex) * count;
+		memcpy(cpu_data, data, dirty_size);
 	}
 	
 	VkBuffer* get() {
-		return buffer+m;
+		if (dirty_size) {
+			memcpy(gpu_data, cpu_data, dirty_size);
+			vmaFlushAllocation(engine.graphics.allocator, allocation, 0, dirty_size);
+			auto c = dirty_size / sizeof(Vertex);
+			if (c > max_vertex_count) max_vertex_count = c;
+			dirty_size = 0;
+		}
+		return &buffer;
 	}
 };
 
-inline int Vertex_Buffer::m = 0;
+struct Chunk_ID {
+	fs::v3s32 pos;
+	int lod;
+	
+	constexpr size_t hash() const {
+		return 8*(pos.z * 1024*1024 + pos.y*1024 + pos.x) + lod;
+	}
+	constexpr bool operator==(Chunk_ID const&) const = default;
+};
 
 struct Chunk {
-	int lod;
-	int quad_count;
-	fs::v3s32 pos;
-	int vertex_buffer;
+	int vertex_buffer = -1;
+	int status = 0;
 };
 
 template <>
-struct std::hash<fs::v3<int>> {
-	_NODISCARD size_t operator()(const fs::v3<int>& _Keyval) const noexcept {
-		return
-			static_cast<size_t>(_Keyval.x)
-		+	static_cast<size_t>(_Keyval.y)
-		+	static_cast<size_t>(_Keyval.z)
-		;
+struct std::hash<Chunk_ID> {
+	_NODISCARD size_t operator()(Chunk_ID const& _Keyval) const noexcept {
+		return _Keyval.hash();
 	}
 };
 
+struct Chunk_Gen_Info {
+	r3i rect;
+	int lod;
+	Chunk chunk;
+};
+
+void gen_chunk(Chunk_Gen_Info& i);
+
 namespace {
-//	std::unordered_map<fs::v3<int>, Chunk> loaded_chunks;
-	std::vector<Chunk>         loaded_chunks;
-	std::vector<Vertex_Buffer> vertex_buffers;
+	inline std::unordered_map<Chunk_ID, Chunk> loaded_chunks;
+	inline std::vector<Vertex_Buffer>          vertex_buffers;
+	inline std::vector<int>                    free_vertex_buffers;
+	inline job_queue<Chunk_Gen_Info>           job_q(8, gen_chunk);
 }
 
-float sdBox(glm::vec3 p, glm::vec3 b)
-{
+void generate_mesh(r3i r, int lod, Vertex_Buffer& vb);
+
+void gen_chunk(Chunk_Gen_Info& i) {
+	generate_mesh(i.rect, i.lod, vertex_buffers[i.chunk.vertex_buffer]);
+}
+
+float sdBox(glm::vec3 p, glm::vec3 b) {
 	glm::vec3 q = abs(p) - b;
 	return glm::length(glm::max(q, 0.0f)) + glm::min(glm::max(q.x, glm::max(q.y, q.z)), 0.0f);
 }
@@ -161,8 +185,8 @@ float sdBox(glm::vec3 p, glm::vec3 b)
 struct World {
 	using Node = LOD_Tree;
 
-	int max_lod = 4;
-	float render_distance = float((8) << max_lod);
+	int max_lod = 12;
+	float render_distance = float((1) << max_lod);
 	Node* root;
 
 	fs::v3f32 center = {};
@@ -174,18 +198,9 @@ struct World {
 	auto build_lod_tree(r3i d, int height) -> Node* {
 		auto node = new(next++) Node(0);
 		node->d = d;
-
-	//	int64_t min = INT64_MAX;
-	//	FS_FOR(8) {
-	//		auto dist = (fs::v3s64(d.corner(i)) - center).lensq();
-	//		if (dist < min) min = dist;
-	//	}
-	//	float dist = std::sqrtf(float(min));
 		float x0 = fs::lerp(float(d.x.low), float(d.x.high), 0.5f);
 		float y0 = fs::lerp(float(d.y.low), float(d.y.high), 0.5f);
 		float z0 = fs::lerp(float(d.z.low), float(d.z.high), 0.5f);
-
-	//	float dist = glm::length(glm::vec3(center.x,center.y,center.z) - glm::vec3(x0,y0,z0));
 		float dist = sdBox(
 			glm::vec3(center.x,center.y,center.z)
 		-	glm::vec3(x0,y0,z0)
@@ -195,7 +210,7 @@ struct World {
 			float(d.z.difference()) * 0.5f
 		));
 
-		if ((lod_from_distance(dist) > height && height < 5)
+		if ((lod_from_distance(dist) > height && height < max_lod)
 			//	|| height < 3
 			) {
 			FS_FOR(8) {
@@ -209,8 +224,9 @@ struct World {
 	};
 
 	World() {
-		start = (Node*)malloc(sizeof(Node) * 2048);
-		end = start + 2048;
+		auto N = 1 << 16;
+		start = (Node*)malloc(sizeof(Node) * N);
+		end = start + N;
 	}
 
 	void generate_lod_tree() {
@@ -222,116 +238,140 @@ struct World {
 	}
 
 	auto lod_from_distance(float dist) -> int {
-	//	return (max_lod+1) - (int(dist) >> 4);
-	//	return int(float(max_lod+1) - (dist / 32.0f));
-	
-		if (dist <  32.0f) return 5;
-		if (dist <  64.0f) return 4;
-		if (dist < 128.0f) return 3;
-		if (dist < 256.0f) return 2;
-		return 1;
+	//	return std::clamp(int(8 - (dist - 64.0f)/300.0f), 2, 8);
+	//	return std::clamp(int(7 - (dist - 64.0f)/600.0f), 2, 9);
+
+		float s = 64.0f, d = 256.0f;
+		if (dist < s)      return 8;
+		if (dist < s+d)    return 7;
+		if (dist < s+d*2)  return 6;
+		if (dist < s+d*4)  return 5;
+		if (dist < s+d*8)  return 4;
+		if (dist < s+d*16) return 3;
+		if (dist < s+d*32) return 2;
+		                   return 1;
 	}
 };
 
-void generate_mesh(fs::v2f32 center, int lod, float rd) {
-	float size = rd / float(1 << lod);
-	fs::rf32 rect = fs::rf32::from_center(center, size, size);
-}
-
-inline std::vector<Vertex> V;
-
-void recursive_gen(int& k, World::Node* node, float rd) {
-	if (node == nullptr) return;
-	if (node->lod != 0) {
-		auto r = node->d;
+void generate_mesh(r3i r, int lod, Vertex_Buffer& vb) {
+	static constexpr int L = 16;
 	//
 	//	auto L = (8 << 5) / (1 << node->lod);
 	//
-		uint8_t blocks[8*8*8];
-		for (int z = 0; z < 8; ++z)
-		for (int y = 0; y < 8; ++y)
-		for (int x = 0; x < 8; ++x) {
-			float x0 = fs::lerp(float(r.x.low), float(r.x.high), (float(x)+0.5f)/8.0f);
-			float y0 = fs::lerp(float(r.y.low), float(r.y.high), (float(y)+0.5f)/8.0f);
-			float z0 = fs::lerp(float(r.z.low), float(r.z.high), (float(z)+0.5f)/8.0f);
+	uint8_t blocks[L*L*L];
+	for (int z = 0; z < L; ++z)
+	for (int y = 0; y < L; ++y)
+	for (int x = 0; x < L; ++x) {
+		float x0 = fs::lerp(float(r.x.low), float(r.x.high), (float(x)+0.5f)/L);
+		float y0 = fs::lerp(float(r.y.low), float(r.y.high), (float(y)+0.5f)/L);
+		float z0 = fs::lerp(float(r.z.low), float(r.z.high), (float(z)+0.5f)/L);
 			
-		//	auto w = stb_perlin_noise3(x0/Vertex::d,-y0/Vertex::d, z0/Vertex::d, 0, 0, 0);
-		//	blocks[z*8*8+y*8+x] = uint8_t(w < 0.1f);
-			auto w = stb_perlin_ridge_noise3(x0/Vertex::d,-y0/Vertex::d, z0/Vertex::d, 2.0f, 0.5f, 1.0f, 2);
-			blocks[z*8*8+y*8+x] = uint8_t(w < 0.4f);
-		}
+		auto w = stb_perlin_noise3(x0/Vertex::d,-y0/Vertex::d, z0/Vertex::d, 0, 0, 0);
+		blocks[z*L*L+y*L+x] = uint8_t(w < 0.1f);
+	//	auto h = stb_perlin_noise3(0.5f*x0/Vertex::d, 0.0f,-0.5f*z0/Vertex::d, 0, 0, 0) * 256.0f - 3000.0f;
+	//	blocks[z*L*L+y*L+x] = y0 < h;
+	//	auto w = stb_perlin_ridge_noise3(x0/Vertex::d,-y0/Vertex::d, z0/Vertex::d, 2.0f, 0.5f, 1.0f, 2);
+	//	blocks[z*L*L+y*L+x] = uint8_t(w < 0.4f);
+	}
 
-		V.clear();
-		for (int z = 0; z < 8; ++z)
-		for (int y = 0; y < 8; ++y)
-		for (int x = 0; x < 8; ++x) {
-			uint8_t b = blocks[z*8*8+y*8+x];
-			if (b) {
-				float x0 = fs::lerp(float(r.x.low), float(r.x.high), float(x  )/8.0f);
-				float x1 = fs::lerp(float(r.x.low), float(r.x.high), float(x+1)/8.0f);
-				float y0 = fs::lerp(float(r.y.low), float(r.y.high), float(y  )/8.0f);
-				float y1 = fs::lerp(float(r.y.low), float(r.y.high), float(y+1)/8.0f);
-				float z0 = fs::lerp(float(r.z.low), float(r.z.high), float(z  )/8.0f);
-				float z1 = fs::lerp(float(r.z.low), float(r.z.high), float(z+1)/8.0f);
+	auto V = reinterpret_cast<Vertex*>(vb.cpu_data);
+	uint32_t count = 0;
 
-				float p = Vertex::color_from_position(0.5f*(x0 + x1),0.5f*(y0 + y1),0.5f*(z0 + z1));
+	for (int z = 0; z < L; ++z)
+	for (int y = 0; y < L; ++y)
+	for (int x = 0; x < L; ++x) {
+		uint8_t b = blocks[z*L*L+y*L+x];
+		if (b) {
+			float x0 = fs::lerp(float(r.x.low), float(r.x.high), float(x  )/L);
+			float x1 = fs::lerp(float(r.x.low), float(r.x.high), float(x+1)/L);
+			float y0 = fs::lerp(float(r.y.low), float(r.y.high), float(y  )/L);
+			float y1 = fs::lerp(float(r.y.low), float(r.y.high), float(y+1)/L);
+			float z0 = fs::lerp(float(r.z.low), float(r.z.high), float(z  )/L);
+			float z1 = fs::lerp(float(r.z.low), float(r.z.high), float(z+1)/L);
 
-				if (x == 0 || (x > 0 && !blocks[z*8*8+y*8+(x-1)])) {
-					V.emplace_back(x0, y0, z0, p);
-					V.emplace_back(x0, y0, z1, p);
-					V.emplace_back(x0, y1, z0, p);
-					V.emplace_back(x0, y1, z1, p);
-				}
-				if (x == 7 || (x < 7 && !blocks[z*8*8+y*8+(x+1)])) {
-					V.emplace_back(x1, y0, z0, p);
-					V.emplace_back(x1, y0, z1, p);
-					V.emplace_back(x1, y1, z0, p);
-					V.emplace_back(x1, y1, z1, p);
-				}
-				if (y == 0 || (y > 0 && !blocks[z*8*8+(y-1)*8+x])) {
-					V.emplace_back(x0, y0, z0, p);
-					V.emplace_back(x0, y0, z1, p);
-					V.emplace_back(x1, y0, z0, p);
-					V.emplace_back(x1, y0, z1, p);
-				}
-				if (y == 7 || (y < 7 && !blocks[z*8*8+(y+1)*8+x])) {
-					V.emplace_back(x0, y1, z0, p);
-					V.emplace_back(x0, y1, z1, p);
-					V.emplace_back(x1, y1, z0, p);
-					V.emplace_back(x1, y1, z1, p);
-				}
-				if (z == 0 || (z > 0 && !blocks[(z-1)*8*8+y*8+x])) {
-					V.emplace_back(x0, y0, z0, p);
-					V.emplace_back(x0, y1, z0, p);
-					V.emplace_back(x1, y0, z0, p);
-					V.emplace_back(x1, y1, z0, p);
-				}
-				if (z == 7 || (z < 7 && !blocks[(z+1)*8*8+y*8+x])) {
-					V.emplace_back(x0, y0, z1, p);
-					V.emplace_back(x0, y1, z1, p);
-					V.emplace_back(x1, y0, z1, p);
-					V.emplace_back(x1, y1, z1, p);
-				}
+			float p = Vertex::color_from_position(0.5f*(x0 + x1),0.5f*(y0 + y1),0.5f*(z0 + z1));
+
+			if (x == 0 || (x > 0 && !blocks[z*L*L+y*L+(x-1)])) {
+				V[count++] = {x0, y0, z0, p};
+				V[count++] = {x0, y0, z1, p};
+				V[count++] = {x0, y1, z0, p};
+				V[count++] = {x0, y1, z1, p};
+			}
+			if (x == L-1 || (x < L-1 && !blocks[z*L*L+y*L+(x+1)])) {
+				V[count++] = {x1, y0, z0, p};
+				V[count++] = {x1, y0, z1, p};
+				V[count++] = {x1, y1, z0, p};
+				V[count++] = {x1, y1, z1, p};
+			}
+			if (y == 0 || (y > 0 && !blocks[z*L*L+(y-1)*L+x])) {
+				V[count++] = {x0, y0, z0, p};
+				V[count++] = {x0, y0, z1, p};
+				V[count++] = {x1, y0, z0, p};
+				V[count++] = {x1, y0, z1, p};
+			}
+			if (y == L-1 || (y < L-1 && !blocks[z*L*L+(y+1)*L+x])) {
+				V[count++] = {x0, y1, z0, p};
+				V[count++] = {x0, y1, z1, p};
+				V[count++] = {x1, y1, z0, p};
+				V[count++] = {x1, y1, z1, p};
+			}
+			if (z == 0 || (z > 0 && !blocks[(z-1)*L*L+y*L+x])) {
+				V[count++] = {x0, y0, z0, p};
+				V[count++] = {x0, y1, z0, p};
+				V[count++] = {x1, y0, z0, p};
+				V[count++] = {x1, y1, z0, p};
+			}
+			if (z == L-1 || (z < L-1 && !blocks[(z+1)*L*L+y*L+x])) {
+				V[count++] = {x0, y0, z1, p};
+				V[count++] = {x0, y1, z1, p};
+				V[count++] = {x1, y0, z1, p};
+				V[count++] = {x1, y1, z1, p};
 			}
 		}
+	}
 
-		if (V.size()) {
-			auto& vb = vertex_buffers[k];
-			vb.send(V.data(), (uint32_t)V.size());
-			Chunk c;
-			c.lod = 0;
-			c.quad_count = int(V.size()) / 4;
-			c.vertex_buffer = k++;
-			c.pos = r.corner(0) + r.size()/2;
-			loaded_chunks.emplace_back(c);
+	if (count) {
+		vb.dirty_size = count * sizeof(Vertex);
+	//	vb.send(V.data(), (uint32_t)V.size());
+		int quad_count = uint32_t(count / 4);
+		vb.index_count = quad_count*6;
+	}
+	else vb.index_count = 0;
+}
+
+int cache_misses = 0;
+
+void recursive_gen(World::Node* node, int height) {
+	if (node == nullptr) return;
+	if (node->lod != 0) {
+		auto& chunk = loaded_chunks[Chunk_ID(node->d.pos(), node->lod)];
+		chunk.status = 1;
+		if (chunk.vertex_buffer == -1) {
+			if (free_vertex_buffers.empty()) return;
+
+			auto next_vertex_buffer = free_vertex_buffers.back();
+			free_vertex_buffers.pop_back();
+			chunk.vertex_buffer = next_vertex_buffer;
+			vertex_buffers[next_vertex_buffer].index_count = 0;
+
+			Chunk_Gen_Info info;
+			info.chunk = chunk;
+			info.lod = node->lod;
+			info.rect = node->d;
+			job_q.add_work(std::move(info));
+
+			cache_misses += 1;
 		}
 	}
-	else FS_FOR(8) recursive_gen(k, node->octant[i], rd);
+	else {
+		FS_FOR(8)
+			recursive_gen(node->octant[i], height + 1);
+	}
 }
 
 void generate_meshes_from_world(World const& w) {
-	int i = 0;
-	recursive_gen(i, w.root, w.render_distance);
+	cache_misses = 0;
+	recursive_gen(w.root, 1);
 }
 
 struct World_Renderer {
@@ -463,6 +503,9 @@ struct World_Renderer {
 			vmaUnmapMemory(engine.graphics.allocator, index_allocation);
 			vmaFlushAllocation(engine.graphics.allocator, index_allocation, 0, sizeof(fs::u16) * index_count);
 		}
+		vertex_buffers.resize(1 << 12);
+		FS_FOR(vertex_buffers.size())
+			free_vertex_buffers.emplace_back(int(i));
 	}
 	void destroy() {
 		vmaDestroyBuffer(engine.graphics.allocator, index_buffer, index_allocation);
@@ -562,40 +605,70 @@ struct World_Renderer {
 
 		auto p = (fs::v3s32)fs::v3f32::from(cc.position);
 
-		std::sort(loaded_chunks.begin(), loaded_chunks.end(), [&](Chunk const& l, Chunk const& r) {
-			auto dl = (l.pos - p).lensq();
-			auto dr = (r.pos - p).lensq();
-			return dl < dr;
-		});
+		static std::vector<Chunk> chunks;
+		chunks.clear();
 
-		int max_quad_count = 0;
+		auto compare = [&](Chunk const& l, Chunk const& r) {
+			return l.status < r.status;
+		};
 
+#if 0
+		for (auto&& [id, chunk] : loaded_chunks) {
+			if (chunk.vertex_buffer >= 0 && vertex_buffers[chunk.vertex_buffer].index_count == 0) {
+				free_vertex_buffers.emplace_back(chunk.vertex_buffer);
+				chunk.vertex_buffer = -2;
+			}
+		}
+#endif
+
+		for (auto&& [id, chunk] : loaded_chunks) {
+			if (chunk.vertex_buffer < 0) continue;
+			Chunk c;
+			c.status = (id.pos - p).lensq();
+			c.vertex_buffer = chunk.vertex_buffer;
+			auto it = std::lower_bound(chunks.begin(), chunks.end(), c, compare);
+			chunks.insert(it, c);
+		}
+	//	std::sort(loaded_chunks.begin(), loaded_chunks.end(), [&](Chunk const& l, Chunk const& r) {
+	//		auto dl = (l.pos - p).lensq();
+	//		auto dr = (r.pos - p).lensq();
+	//		return dl < dr;
+	//	});
+
+		VkDeviceSize offset = 0;
+		used_vertex_gpu_memory = 0;
 		if (wireframe) {
 			if (wireframe_depth) {
 				vkCmdBindPipeline(ctx->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_pipeline);
-				for (auto&& chunk: loaded_chunks) {
-					VkDeviceSize offset = 0;
-					vkCmdBindVertexBuffers(ctx->command_buffer, 0, 1, vertex_buffers[chunk.vertex_buffer].get(), &offset);
-					vkCmdDrawIndexed(ctx->command_buffer, chunk.quad_count*6, 1, 0, 0, 0);
+				for (auto&& chunk: chunks) {
+					auto& vertex_buffer = vertex_buffers[chunk.vertex_buffer];
+					if (vertex_buffer.index_count) {
+						vkCmdBindVertexBuffers(ctx->command_buffer, 0, 1, vertex_buffer.get(), &offset);
+						vkCmdDrawIndexed(ctx->command_buffer, vertex_buffer.index_count, 1, 0, 0, 0);
+					}
 				}
 			}
 			
 			vkCmdBindPipeline(ctx->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe_pipeline);
-			for (auto&& chunk: loaded_chunks) {
-				VkDeviceSize offset = 0;
-				vkCmdBindVertexBuffers(ctx->command_buffer, 0, 1, vertex_buffers[chunk.vertex_buffer].get(), &offset);
-				vkCmdDrawIndexed(ctx->command_buffer, chunk.quad_count*6, 1, 0, 0, 0);
-				if (chunk.quad_count > max_quad_count) max_quad_count = chunk.quad_count;
+			for (auto&& chunk: chunks) {
+				auto& vertex_buffer = vertex_buffers[chunk.vertex_buffer];
+				if (vertex_buffer.index_count) {
+					vkCmdBindVertexBuffers(ctx->command_buffer, 0, 1, vertex_buffer.get(), &offset);
+					vkCmdDrawIndexed(ctx->command_buffer, vertex_buffer.index_count, 1, 0, 0, 0);
+					used_vertex_gpu_memory += (vertex_buffer.index_count/3)*2;
+				}
 			}
 		}
 		else
 		{
 			vkCmdBindPipeline(ctx->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-			for (auto&& chunk: loaded_chunks) {
-				VkDeviceSize offset = 0;
-				vkCmdBindVertexBuffers(ctx->command_buffer, 0, 1, vertex_buffers[chunk.vertex_buffer].get(), &offset);
-				vkCmdDrawIndexed(ctx->command_buffer, chunk.quad_count*6, 1, 0, 0, 0);
-				if (chunk.quad_count > max_quad_count) max_quad_count = chunk.quad_count;
+			for (auto&& chunk: chunks) {
+				auto& vertex_buffer = vertex_buffers[chunk.vertex_buffer];
+				if (vertex_buffer.index_count) {
+					vkCmdBindVertexBuffers(ctx->command_buffer, 0, 1, vertex_buffer.get(), &offset);
+					vkCmdDrawIndexed(ctx->command_buffer, vertex_buffer.index_count, 1, 0, 0, 0);
+					used_vertex_gpu_memory += (vertex_buffer.index_count/3)*2;
+				}
 			}
 		}
 
@@ -604,8 +677,10 @@ struct World_Renderer {
 	//	skybox.draw(ctx, &view_projection);
 #endif
 
+		engine.debug_layer.add("rendered chunk count: %i", chunks.size());
 		engine.debug_layer.add("chunk count: %i", loaded_chunks.size());
-		engine.debug_layer.add("max chunk quad count: %i", max_quad_count);
+		engine.debug_layer.add("cache misses: %i", cache_misses);
+		engine.debug_layer.add("max vertex count: %i", max_vertex_count);
 
 #if LOBATOMY
 		blend.end(dt, ctx, 0.9f);

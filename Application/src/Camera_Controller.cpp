@@ -124,7 +124,7 @@ auto Camera_Controller::update(float dt) -> void {
 	if (move_mask & MOVE_UP     ) move_speed.y += 1.0f;
 	if (move_mask & MOVE_DOWN   ) move_speed.y -= 1.0f;
 
-	float speed = engine.modifier_keys & fs::keys::Mod_Control ? 50.0f : 5.0f;
+	float speed = engine.modifier_keys & fs::keys::Mod_Control ? 250.0f : 5.0f;
 	auto [forward, left] = get_move_vectors();
 	auto up = glm::vec3(0.0f, 1.0f, 0.0f);
 	position += forward * move_speed.x * speed * dt;
