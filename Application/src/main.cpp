@@ -1,22 +1,8 @@
 ﻿#include <Fission/Core/Engine.hh>
-#include <Fission/Core/Input/Keys.hh>
-#include <Fission/Base/Time.hpp>
-#include <Fission/Base/Math/Vector.hpp>
-#include "Chunk.hpp"
-#include <random>
-#include <format>
-#include <execution>
-#include <fstream>
 #include "Camera_Controller.h"
-#include "Skybox.h"
 #include "outline_technique.h"
-#define STB_IMAGE_IMPLEMENTATION 1
-#include <stb_image.h>
-#define STB_PERLIN_IMPLEMENTATION 1
-#include <stb_perlin.h>
-#include "mesher.hpp"
+#include "World_Renderer.hpp"
 #include "config.hpp"
-#include "job_queue.hpp"
 
 extern void display_fatal_error(const char* title, const char* what);
 extern void generateMipmaps(fs::Graphics& gfx, VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
@@ -56,210 +42,32 @@ struct app_load_data {
 
 extern fs::Engine engine;
 
-
-// This is a terrible rain implementation, very not optimal
-#if RAIN
-struct Rain {
-	struct Particle {
-		fs::v3f32 position;
-	};
-
-	struct Emitter {
-		Particle emit() {
-			return {};
-		}
-	};
-
-	VkBuffer vertex_buffer;
-	VkBuffer index_buffer;
-	VmaAllocation vertex_allocation;
-	VmaAllocation index_allocation;
-
-	vk::Pipeline pipeline;
-	vk::PipelineLayout pipeline_layout;
-
-	std::vector<Particle> drops;
-
-	struct vert {
-#include "../shaders/rain.vert.inl"
-	};
-	struct frag {
-#include "../shaders/rain.frag.inl"
-	};
-
-	static constexpr int max_count = 1 << 14;
-
-	struct vertex {
-		fs::v4f32 position;
-	};
-
-	void create(fs::Graphics& gfx, VkRenderPass rp) {
-		VmaAllocationCreateInfo ai = {};
-		ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-		ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-		VkBufferCreateInfo bi = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-
-		bi.size = max_count * 4 * sizeof(vertex);
-		bi.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-		vmaCreateBuffer(gfx.allocator, &bi, &ai, &vertex_buffer, &vertex_allocation, nullptr);
-
-		bi.size = max_count * 6 * sizeof(fs::u16);
-		bi.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-		ai.usage = VMA_MEMORY_USAGE_AUTO;
-		ai.flags = 0;
-		vmaCreateBuffer(gfx.allocator, &bi, &ai, &index_buffer, &index_allocation, nullptr);
-
-		static constexpr char index_list[] = {
-			0, 1, 2, 2, 3, 0,
-		};
-
-		fs::u16* id = new fs::u16[max_count * 6];
-		int u = 0;
-		for_n(q, max_count)
-			FS_FOR(6) id[u++] = q*4 + index_list[i];
-		gfx.upload_buffer(index_buffer, id, bi.size);
-		delete [] id;
-
-		Pipeline_Layout_Creator{}
-			.add_push_range(VK_SHADER_STAGE_VERTEX_BIT, sizeof(glm::mat4))
-			.create(&pipeline_layout);
-
-		vk::Basic_Vertex_Input<decltype(vertex::position)> vi;
-		Pipeline_Creator pc{ rp, pipeline_layout };
-		pc	.add_shader(VK_SHADER_STAGE_VERTEX_BIT  , fs::create_shader(gfx.device, vert::size, vert::data))
-			.add_shader(VK_SHADER_STAGE_FRAGMENT_BIT, fs::create_shader(gfx.device, frag::size, frag::data))
-			.vertex_input(&vi)
-			.add_dynamic_state(VK_DYNAMIC_STATE_VIEWPORT)
-			.add_dynamic_state(VK_DYNAMIC_STATE_SCISSOR);
-
-		pc.blend_attachment.blendEnable = VK_TRUE;
-		pc.blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
-		pc.blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
-		pc.blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-		pc.blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-		pc.blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-		pc.blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-		
-		pc.depth_stencil_state.depthWriteEnable = VK_FALSE;
-
-		pc.create_and_destroy_shaders(&pipeline);
-	}
-
-	void destroy(fs::Graphics& gfx) {
-		vmaDestroyBuffer(gfx.allocator, vertex_buffer, vertex_allocation);
-		vmaDestroyBuffer(gfx.allocator, index_buffer, index_allocation);
-	}
-
-	void add_quad(vertex*& vd, fs::v3f32 center, fs::v3f32 tangent) {
-		auto up = fs::v3f32(0.0f, 0.2f, 0.0f);
-		*vd++ = vertex{{center - tangent + up, 0.0f}};
-		*vd++ = vertex{{center - tangent - up, 1.0f}};
-		*vd++ = vertex{{center + tangent - up, 1.0f}};
-		*vd++ = vertex{{center + tangent + up, 0.0f}};
-	}
-
-	void generate(Camera_Controller& cam, float dt) {
-		auto view = cam.get_view_direction();
-	//	auto tangent = 0.0025f * fs::v3f32::from(glm::cross(glm::normalize(glm::vec3(view.x, 0.0f, view.z)), glm::vec3(0.0, 1.0, 0.0)));
-
-		auto pos = cam.get_position();
-		int const N = 40;
-
-		if (drops.size() > 16'000) drops.erase(drops.begin(), drops.begin()+N);
-		
-		FS_FOR(N) {
-		//	float d = 2.0f*cam.view_rotation.x + (2.0f * float(rand()) / float(RAND_MAX) - 1.0f);
-			float d = float FS_TAU * float(rand()) / float(RAND_MAX);
-			float r = 0.3f + 10.0f * float(rand()) / float(RAND_MAX);
-			drops.emplace_back(fs::v3f32(pos.x + r*sinf(d), pos.y + 5.0f, pos.z + r*cosf(d)));
-		}
-
-		vertex* vd;
-		vmaMapMemory(engine.graphics.allocator, vertex_allocation, (void**)&vd);
-		for (auto&& [p] : drops) {
-			p.y -= 5.0f * dt;
-			auto tangent = glm::cross(glm::vec3(p.x, p.y, p.z) - pos, glm::vec3(0.0, 1.0, 0.0));
-			tangent = 0.0025f * glm::normalize(tangent);
-			add_quad(vd, p, fs::v3f32::from(tangent));
-		}
-
-		vmaUnmapMemory(engine.graphics.allocator, vertex_allocation);
-		vmaFlushAllocation(engine.graphics.allocator, vertex_allocation, 0, drops.size()*4*sizeof(fs::v3f32));
-	}
-
-	void draw(fs::Render_Context* ctx, Camera_Controller& cam, float dt) {
-		generate(cam, dt);
-
-		auto cmd = ctx->command_buffer;
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-
-		auto transform = cam.get_transform();
-		vkCmdPushConstants(cmd, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transform);
-
-		VkDeviceSize offset = 0;
-		vkCmdBindIndexBuffer(cmd, index_buffer, 0, VK_INDEX_TYPE_UINT16);
-		vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer, &offset);
-
-		vkCmdDrawIndexed(cmd, drops.size() * 6, 1, 0, 0, 0);
-	}
-};
-#endif
-
 class Game_Scene : public fs::Scene
 {
 public:
 	Game_Scene() {
-		app_load_data::load(camera_controller);
+	//	app_load_data::load(camera_controller);
 		camera_controller.position = glm::vec3(0.0f);
-		wr.create();
-	//	outline_technique.create(engine.graphics);
-#if RAIN
-		rain.create(engine.graphics, outline_technique.render_pass);
-#endif
-		world = std::make_unique<World>();
-
+		outline_technique.create(engine.graphics);
+		world_renderer.create(engine.graphics, outline_technique.render_pass);
+	//	world = std::make_unique<World>();
 	//	skybox.create(engine.graphics, wr.render_pass);
-
-		loaded_chunks.clear();
-		world->center = {};
-		world->generate_lod_tree();
-		generate_meshes_from_world(*world);
+	//	loaded_chunks.clear();
+	//	world->center = {};
+	//	world->generate_lod_tree();
+	//	generate_meshes_from_world(*world);
+		world.generate_chunks();
+		world_renderer.upload_world(world);
+		outline_technique.post_fx_enable = false;
 	}
 	virtual ~Game_Scene() override {
-#if RAIN
-		rain.destroy(engine.graphics);
-#endif
-		wr.destroy();
-		app_load_data::save(camera_controller);
-	//	outline_technique.destroy(engine.graphics);
-
+		world_renderer.destroy();
+		outline_technique.destroy(engine.graphics);
+	//	app_load_data::save(camera_controller);
 	//	skybox.destroy(engine.graphics);
 	}
 
-	void update() {
-		for (auto&& [id, chunk] : loaded_chunks) {
-			chunk.status = 0;
-		}
-		world->generate_lod_tree();
-
-		generate_meshes_from_world(*world);
-
-		for (auto it = loaded_chunks.begin(); it != loaded_chunks.end();) {
-			auto const& [id, chunk] = *it;
-
-			if (chunk.status == 0) {
-				if (chunk.vertex_buffer >= 0) {
-					free_vertex_buffers.emplace_back(chunk.vertex_buffer);
-				}
-				loaded_chunks.erase(it);
-				it = loaded_chunks.begin();
-			}
-			else ++it;
-		}
-
-	//	job_q.wait();
-	}
-
+#define toggle(X) X = !(X)
 	void handle_event(fs::Event const& e) {
 		if (camera_controller.handle_event(e)) return;
 		switch (e.type)
@@ -273,15 +81,11 @@ public:
 			else if (e.key_down.key_id == fs::keys::T)
 				camera_controller.position = {};
 			else if (e.key_down.key_id == fs::keys::L)
-				wireframe = !wireframe;
+				toggle(world_renderer.debug_wireframe);
 			else if (e.key_down.key_id == fs::keys::K)
-				post_fx_enable = !post_fx_enable;
+				toggle(outline_technique.post_fx_enable);
 			else if (e.key_down.key_id == fs::keys::J)
-				wireframe_depth = !wireframe_depth;
-			else if (e.key_down.key_id == fs::keys::R) {
-				loaded_chunks.clear();
-				update();
-			}
+				toggle(world_renderer.debug_show_chunk_bounds);
 		}
 		break; case fs::Event_Key_Up: {
 			if (e.key_down.key_id == fs::keys::Escape)
@@ -296,82 +100,41 @@ public:
 
 		using namespace fs;
 		float dt = (float)_dt;
-		camera_controller.update(dt);
-#if RAIN
-		rain.draw(ctx, camera_controller, dt);
-#endif
-		auto P = camera_controller.position;
-		static glm::vec3 Pp;
-		if (P != Pp) {
-			world->center = v3f32::from(P);
-			update();
-			Pp = P;
-		}
 
-		wr.draw(ctx, camera_controller, dt, wireframe, wireframe_depth);
+		camera_controller.update(dt);
+
+		world_renderer.use_render_pass = false;
+		outline_technique.begin(ctx);
+		world_renderer.draw(*ctx, camera_controller, world, dt);
+		outline_technique.end(ctx);
 		
 		{
 			auto C = camera_controller.get_chunk_position();
 			auto P = glm::ivec3(glm::round(camera_controller.position));
 			engine.debug_layer.add("Position: %i,%i,%i  Chunk: %i,%i,%i", P.x, P.y, P.z, C.x, C.y, C.z);
 		}
-		engine.debug_layer.add("render wireframe: %s", FS_BTF(wireframe));
+	//	engine.debug_layer.add("render wireframe: %s", FS_BTF(wireframe));
 		float FOV = camera_controller.field_of_view;
 		engine.debug_layer.add("FOV: %.2f (%.1f deg)", FOV, FOV * (360.0f/float(FS_TAU)));
 	//	engine.debug_layer.add("number of quads: %i", total_number_of_quads);
 		auto total_mib = double(total_vertex_gpu_memory)/double(1024*1024);
 		auto usage = double(100 * used_vertex_gpu_memory) / double(total_vertex_gpu_memory);
 		engine.debug_layer.add("GPU memory usage: %.2f%% / %.3f MiB", usage, total_mib);
-		engine.debug_layer.add("render distance: %.0f", world->render_distance);
+	//	engine.debug_layer.add("render distance: %.0f", world->render_distance);
 	}
 
 	virtual void on_resize() override {
-		wr.resize_frame_buffers();
+		world_renderer.resize_frame_buffers();
+		outline_technique.resize(engine.graphics);
 	}
 private:
 	Camera_Controller camera_controller;
-	std::unique_ptr<World> world;
-#if RAIN
-	Rain rain;
-#endif
-	bool wireframe = false;
-	bool wireframe_depth = true;
-	bool post_fx_enable  = RAIN? false:true;
-
-//	Skybox skybox;
-
-	World_Renderer wr;
+	World             world;
+	World_Renderer    world_renderer;
+	Outline_Technique outline_technique;
 };
 
 fs::Scene* on_create_scene(fs::Scene_Key const& key) {
-//	int constexpr N = 1'000'000'000;
-//	std::vector<int> random_array;
-//	random_array.resize(N);
-//	struct Work {
-//		int* dst;
-//		int count;
-//	};
-//	auto generate = [](Work& w) {
-//		FS_FOR (w.count) {
-//			w.dst[i] = rand();
-//		}
-//	};
-//	job_queue<Work> job_queue{8, generate};
-//
-//	double start = fs::timestamp();
-//#if 1
-//	FS_FOR(8) job_queue.add_work(random_array.data() + (i*(N/8)), N/8);
-//	job_queue.wait();
-//#else
-//	FS_FOR(N) random_array.data()[i] = rand();
-//#endif
-//	double time_took = fs::seconds_elasped(start, fs::timestamp());
-//
-//	char buffer[128];
-//	snprintf(buffer, sizeof(buffer), "error: time took: %f\n", time_took);
-//	OutputDebugStringA(buffer);
-//
-//	return nullptr;
 	return new Game_Scene;
 }
 

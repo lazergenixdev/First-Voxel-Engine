@@ -8,7 +8,7 @@
 extern fs::Engine engine;
 
 auto Camera_Controller::get_chunk_position() const -> fs::v3s32 {
-	return fs::v3s32::from(glm::ivec3(glm::floor(position)) >> 3);
+	return fs::v3s32::from(glm::ivec3(glm::floor(position)) / 128);
 }
 
 auto Camera_Controller::get_position() const -> glm::vec3 {
@@ -21,7 +21,7 @@ auto Camera_Controller::get_position() const -> glm::vec3 {
 auto Camera_Controller::get_transform() const -> glm::mat4 {
 	float aspect = float(engine.graphics.sc_extent.width) / float(engine.graphics.sc_extent.height);
 #if 1
-	glm::mat4 Projection  = glm::perspectiveLH_ZO(field_of_view, aspect, 0.1f, 1e4f);
+	glm::mat4 Projection  = glm::perspectiveLH_ZO(field_of_view, aspect, 0.5f, 1e8f);
 #else // Interesting camera stuff
 	glm::mat4 Perspective  = glm::perspectiveLH_ZO(field_of_view, aspect, 0.1f, 1e4f);
 	float d = 10.0f;
@@ -115,8 +115,6 @@ auto Camera_Controller::update(float dt) -> void {
 
 	fs::v3f32 move_speed = {};
 
-//	move_mask |= MOVE_FORWARD;
-
 	if (move_mask & MOVE_FORWARD) move_speed.x += 1.0f;
 	if (move_mask & MOVE_BACK   ) move_speed.x -= 1.0f;
 	if (move_mask & MOVE_RIGHT  ) move_speed.z -= 1.0f;
@@ -124,7 +122,7 @@ auto Camera_Controller::update(float dt) -> void {
 	if (move_mask & MOVE_UP     ) move_speed.y += 1.0f;
 	if (move_mask & MOVE_DOWN   ) move_speed.y -= 1.0f;
 
-	float speed = engine.modifier_keys & fs::keys::Mod_Control ? 250.0f : 5.0f;
+	float speed = engine.modifier_keys & fs::keys::Mod_Control ? 500.0f : 20.0f;
 	auto [forward, left] = get_move_vectors();
 	auto up = glm::vec3(0.0f, 1.0f, 0.0f);
 	position += forward * move_speed.x * speed * dt;
