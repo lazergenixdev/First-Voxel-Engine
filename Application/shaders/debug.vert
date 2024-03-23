@@ -12,7 +12,8 @@ layout (set = 0, binding = 0) uniform B {
 } u;
 
 void main() {
-	vec3 position = v_position * vec3(1.0, 500.0, 1.0) + chunk.offset*128.0;
+	vec3 position = v_position * vec3(1.0, 500.0, 1.0);
+	//+ chunk.offset*128.0;
 	f_position = position;
 	gl_Position = u.view_projection * vec4(position, 1.0);
 }

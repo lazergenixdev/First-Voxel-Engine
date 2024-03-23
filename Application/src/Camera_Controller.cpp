@@ -13,7 +13,7 @@ auto Camera_Controller::get_chunk_position() const -> fs::v3s32 {
 
 auto Camera_Controller::get_position() const -> glm::vec3 {
 	auto P = position - glm::vec3((glm::ivec3(glm::floor(position)) >> 3) << 3);
-	P += glm::vec3(float(render_chunk_radius * 8), 0, float(render_chunk_radius * 8));
+//	P += glm::vec3(float(render_chunk_radius * 8), 0, float(render_chunk_radius * 8));
 	P.y = position.y;
 	return P;
 }
@@ -43,27 +43,33 @@ auto Camera_Controller::get_transform() const -> glm::mat4 {
 
 	return glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f))
 		* Projection
-		* glm::lookAtLH(eye, center, up);
+		* glm::lookAtLH(eye, center, up)
 		//	* glm::translate(glm::mat4(1.0f), -0.1f * position)
-	//	* glm::scale(glm::mat4(1.0f), glm::vec3(0.25f));
+	//	* glm::scale(glm::mat4(1.0f), glm::vec3(0.1f))
+		;
 }
 
 auto Camera_Controller::get_skybox_transform() const -> glm::mat4
 {
-	glm::mat4 Projection = glm::perspectiveLH_NO(field_of_view, 16.0f / 9.0f, 0.025f, 1000.f);
+	float aspect = float(engine.graphics.sc_extent.width) / float(engine.graphics.sc_extent.height);
+	glm::mat4 Projection = glm::perspectiveLH_ZO(field_of_view, aspect, 0.5f, 1e8f);
 	glm::vec3 center = get_view_direction();
 	glm::vec3 eye = { 0.0f, 0.0f, 0.0f };
 	glm::vec3 up = { 0.0f, 1.0f, 0.0f };
 	return { glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f))
 	* Projection
 	* glm::lookAtLH(eye, center, up)
-	* glm::scale(glm::mat4(1.0f), glm::vec3(400.0f, 400.0f, 400.0f))
+	* glm::scale(glm::mat4(1.0f), glm::vec3(400.0f))
 	};
 }
 
 auto Camera_Controller::get_move_vectors() const -> std::pair<glm::vec3, glm::vec3> {
-	glm::vec3 center = get_view_direction();
-	glm::vec3 forward = glm::normalize(glm::vec3(center.x, 0.0f, center.z));
+	glm::vec3 view = get_view_direction();
+#if FREE_FLY
+	glm::vec3 forward = glm::normalize(view);
+#else
+	glm::vec3 forward = glm::normalize(glm::vec3(view.x, 0.0f, view.z));
+#endif
 	glm::vec3 left = glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f));
 	return { forward, left };
 }
@@ -109,7 +115,7 @@ auto Camera_Controller::handle_event(fs::Event const& e) -> bool {
 
 auto Camera_Controller::update(float dt) -> void {
 	view_rotation += rotation_delta * 0.25f * fs::v2f32(mouse_sensitivity, -mouse_sensitivity);
-	view_rotation.y = std::clamp(view_rotation.y, -float(FS_PI / 2.0) + 0.001f, float(FS_PI / 2.0) - 0.001f);
+	view_rotation.y = std::clamp(view_rotation.y, -float(FS_PI / 2.0) + 0.01f, float(FS_PI / 2.0) - 0.01f);
 	view_rotation.x = std::fmodf(view_rotation.x, float(FS_TAU));
 	rotation_delta = {};
 
@@ -122,7 +128,10 @@ auto Camera_Controller::update(float dt) -> void {
 	if (move_mask & MOVE_UP     ) move_speed.y += 1.0f;
 	if (move_mask & MOVE_DOWN   ) move_speed.y -= 1.0f;
 
-	float speed = engine.modifier_keys & fs::keys::Mod_Control ? 500.0f : 20.0f;
+	float speed = 20.0f;
+	if (engine.modifier_keys & fs::keys::Mod_Control) speed *= 30.0f;
+	if (engine.modifier_keys & fs::keys::Mod_Alt)     speed *= 30.0f;
+
 	auto [forward, left] = get_move_vectors();
 	auto up = glm::vec3(0.0f, 1.0f, 0.0f);
 	position += forward * move_speed.x * speed * dt;

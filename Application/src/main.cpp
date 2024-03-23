@@ -2,7 +2,10 @@
 #include "Camera_Controller.h"
 #include "outline_technique.h"
 #include "World_Renderer.hpp"
+#include "Skybox.h"
 #include "config.hpp"
+
+using namespace std::chrono_literals;
 
 extern void display_fatal_error(const char* title, const char* what);
 extern void generateMipmaps(fs::Graphics& gfx, VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
@@ -41,6 +44,7 @@ struct app_load_data {
 };
 
 extern fs::Engine engine;
+static bool thread_alive = true;
 
 class Game_Scene : public fs::Scene
 {
@@ -50,21 +54,19 @@ public:
 		camera_controller.position = glm::vec3(0.0f);
 		outline_technique.create(engine.graphics);
 		world_renderer.create(engine.graphics, outline_technique.render_pass);
-	//	world = std::make_unique<World>();
-	//	skybox.create(engine.graphics, wr.render_pass);
-	//	loaded_chunks.clear();
-	//	world->center = {};
-	//	world->generate_lod_tree();
-	//	generate_meshes_from_world(*world);
+		skybox.create(engine.graphics, outline_technique.render_pass);
+		
+		world.init();
+		world.center_position = camera_controller.position;
 		world.generate_chunks();
 		world_renderer.upload_world(world);
-		outline_technique.post_fx_enable = false;
 	}
 	virtual ~Game_Scene() override {
+		world.uninit();
 		world_renderer.destroy();
 		outline_technique.destroy(engine.graphics);
+		skybox.destroy(engine.graphics);
 	//	app_load_data::save(camera_controller);
-	//	skybox.destroy(engine.graphics);
 	}
 
 #define toggle(X) X = !(X)
@@ -86,6 +88,13 @@ public:
 				toggle(outline_technique.post_fx_enable);
 			else if (e.key_down.key_id == fs::keys::J)
 				toggle(world_renderer.debug_show_chunk_bounds);
+			else if (e.key_down.key_id == fs::keys::H) {
+				camera_controller.position = {};
+				world.center_position = camera_controller.position;
+				world.loaded_chunks.clear();
+				world.generate_chunks();
+				world_renderer.upload_world(world);
+			}
 		}
 		break; case fs::Event_Key_Up: {
 			if (e.key_down.key_id == fs::keys::Escape)
@@ -103,9 +112,28 @@ public:
 
 		camera_controller.update(dt);
 
+		bool chunks_were_loaded = world.add_new_chunks();
+		world.center_position = camera_controller.position;
+		static glm::vec3 P = {};
+#if CPU_SIDE_BACKFACE_CULLING
+		if (P != world.center_position) {
+			P = world.center_position;
+			world.generate_chunks();
+			world_renderer.upload_world(world);
+		}
+		else
+#else
+		world.generate_chunks();
+#endif
+		if (chunks_were_loaded) {
+			world_renderer.upload_world(world);
+		}
+
 		world_renderer.use_render_pass = false;
 		outline_technique.begin(ctx);
 		world_renderer.draw(*ctx, camera_controller, world, dt);
+		auto transform = camera_controller.get_skybox_transform();
+		skybox.draw(ctx, &transform);
 		outline_technique.end(ctx);
 		
 		{
@@ -117,10 +145,10 @@ public:
 		float FOV = camera_controller.field_of_view;
 		engine.debug_layer.add("FOV: %.2f (%.1f deg)", FOV, FOV * (360.0f/float(FS_TAU)));
 	//	engine.debug_layer.add("number of quads: %i", total_number_of_quads);
-		auto total_mib = double(total_vertex_gpu_memory)/double(1024*1024);
+		auto total_mib = SIZE_MB(total_vertex_gpu_memory);
 		auto usage = double(100 * used_vertex_gpu_memory) / double(total_vertex_gpu_memory);
 		engine.debug_layer.add("GPU memory usage: %.2f%% / %.3f MiB", usage, total_mib);
-	//	engine.debug_layer.add("render distance: %.0f", world->render_distance);
+		engine.debug_layer.add("World Size: %i x %i", CHUNK_SIZE << world.world_size, CHUNK_SIZE << world.world_size);
 	}
 
 	virtual void on_resize() override {
@@ -132,6 +160,7 @@ private:
 	World             world;
 	World_Renderer    world_renderer;
 	Outline_Technique outline_technique;
+	Skybox            skybox;
 };
 
 fs::Scene* on_create_scene(fs::Scene_Key const& key) {

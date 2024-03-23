@@ -50,5 +50,6 @@ void main() {
 	uint index = cube_indices[gl_VertexIndex];
 	vec3 P = cube_vertices[index];
 	direction = P;
-	gl_Position = transform.view_projection * vec4(P, 1.0);
+	vec4 L = transform.view_projection * vec4(P, 1.0);
+	gl_Position = vec4(L.xy, L.w-0.0001, L.w);
 }

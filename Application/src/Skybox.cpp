@@ -33,7 +33,7 @@ auto Skybox::create(fs::Graphics& gfx, VkRenderPass in_render_pass) -> void {
 		.add_dynamic_state(VK_DYNAMIC_STATE_VIEWPORT)
 		.add_dynamic_state(VK_DYNAMIC_STATE_SCISSOR);
 	//	pc.blend_attachment.blendEnable = VK_FALSE;
-	pc.multisample_state.rasterizationSamples = VK_SAMPLE_COUNT_8_BIT;
+	//pc.multisample_state.rasterizationSamples = VK_SAMPLE_COUNT_8_BIT;
 	pc.create_and_destroy_shaders(&pipeline);
 
 	auto format = VK_FORMAT_R8G8B8A8_UNORM;

@@ -4,7 +4,7 @@ layout (location = 0) in  vec3 position;
 layout (location = 0) out vec4 frag_color;
 
 float dist(float y) {
-	return abs(y/400.0);
+	return abs(y/2048.0);
 }
 
 void main() {

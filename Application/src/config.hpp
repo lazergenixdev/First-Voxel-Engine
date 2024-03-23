@@ -7,11 +7,17 @@
 #define SQ(X) (X*X)
 #define MAP2D(X,Y,WIDTH) (Y * WIDTH + X)
 
-static constexpr int world_chunk_height = 16;
-
 inline int64_t total_vertex_gpu_memory = 0;
 inline int64_t used_vertex_gpu_memory  = 0;
 inline int64_t total_number_of_quads   = 0;
 
-inline int render_chunk_radius = 64;
+#define SIZE_MB(X) double(X)/double(1024*1024)
+
+#define CHUNK_SIZE  64
+#define THREAD_COUNT 8
+
+#define CPU_SIDE_BACKFACE_CULLING 1
+
+#define FREE_FLY 1
+
 #endif

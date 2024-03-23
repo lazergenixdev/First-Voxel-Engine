@@ -7,7 +7,7 @@
 
 template <typename Work>
 struct job_queue {
-	using Work_Function = void(*)(Work&);
+	using Work_Function = void(*)(Work, int);
 
 	std::mutex                work_access;
 	std::vector<Work>         work;
@@ -53,14 +53,11 @@ struct job_queue {
 
 	static void worker_thread_main(job_queue* context, int i) {
 		while (context->alive) {
-			std::unique_lock lock{context->worker_mutexes[i]};
-			context->cond.wait(lock);
-
 			_interlockedadd(&context->number_of_active_threads, 1);
 			bool have_work = false;
 			Work work;
 		do_work:
-			if (have_work) context->f(work);
+			if (have_work) context->f(work, i);
 
 			{
 				std::scoped_lock lock_{context->work_access};
@@ -77,6 +74,9 @@ struct job_queue {
 				std::unique_lock lock{context->mutex};
 				context->done.notify_one();
 			}
+
+			std::unique_lock lock{context->worker_mutexes[i]};
+			context->cond.wait(lock);
 		}
 	}
 };

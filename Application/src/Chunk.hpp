@@ -54,6 +54,31 @@ r3<T> octant(r3<T> const& r, int index) {
 	);
 }
 
+#define TEST 1
+
+#if TEST
+#define IFN_TEST(...)
+struct Vertex {
+	using u8  = fs::u8;
+	using u32 = fs::u32;
+	u32 data;
+
+#define XYZ_MASK(X) ((u32)X&0b1111111)
+#define LOD_MASK(X) ((u32)X&0b111)
+
+	
+//        24      16       8
+//  00000000000000000000000000000000
+//	{    x }{    y }{    z }{  pal }
+	Vertex(u8 x, u8 y, u8 z, u8 p):
+		data((XYZ_MASK(x)   << 24)
+		|    (XYZ_MASK(y)   << 16)
+		|    (XYZ_MASK(z)   << 8)
+		| p)
+	{}
+};
+#else
+#define IFN_TEST(...) __VA_ARGS__
 struct Vertex {
 	fs::v3f32 position;
 	float     palette;
@@ -72,6 +97,7 @@ struct Vertex {
 	//	return y/256.0f;
 	}
 };
+#endif
 
 struct _Quad {
 	fs::u8 w[4];
@@ -107,12 +133,26 @@ namespace Normal {
 
 // chunk size: 128x128x128
 struct Chunk {
-	fs::u32 index_count;
-	fs::u32 vertex_offset;
+//	fs::u32 index_count = 0;
+//	fs::u32 vertex_offset = 0;
 	fs::v3s32 position;
 	int lod = 0;
 	std::vector<Quad> quads;
+	bool active = true;
+	bool place_holder = false;
+
+	int priority = 0;
+
+	auto lod_position() -> fs::v3s32 {
+		int size = CHUNK_SIZE << lod;
+		return fs::v3s32{ position.x + size / 2, 0, position.z + size / 2 };
+	}
 };
+
+static float sdBox(glm::vec3 p, glm::vec3 b) {
+	glm::vec3 q = abs(p) - b;
+	return glm::length(glm::max(q, 0.0f)) + glm::min(glm::max(q.x, glm::max(q.y, q.z)), 0.0f);
+}
 
 /*
 inline int max_vertex_count = 0;

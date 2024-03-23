@@ -18,6 +18,8 @@ struct World_Renderer {
 		float dt
 	) -> void;
 
+	auto create_vertex_buffers() -> void;
+
 	fs::Render_Pass  render_pass;
 	VkPipelineLayout pipeline_layout;
 	VkPipeline       pipeline;
@@ -32,10 +34,22 @@ struct World_Renderer {
 	VkDescriptorSet  transform_set;
 	VkBuffer         transform_buffer;
 	VmaAllocation    transform_allocation;
-	VkBuffer         vertex_buffer;
-	VmaAllocation    vertex_allocation;
-	Vertex*          mapped_vertex_gpu_data = nullptr;
+
+	VkBuffer         vertex_buffer[2] = {};
+	VmaAllocation    vertex_allocation[2] = {};
+	Vertex*          mapped_vertex_gpu_data[2] = {};
+	fs::u32          vbi = 0; // vertex buffer index
+
 	Vertex*          vertex_cpu_data = nullptr;
+
+	struct Chunk_Draw_Data {
+		fs::v3s32 position;
+		fs::u32   lod;
+		fs::u32   vertex_offset;
+		fs::u32   index_count;
+	};
+
+	std::vector<Chunk_Draw_Data> chunks;
 
 	struct Debug_Vertex {
 		fs::v3f32 position;
@@ -43,8 +57,8 @@ struct World_Renderer {
 	VkPipeline       debug_pipeline;
 	VkBuffer         debug_vertex_buffer;
 	VmaAllocation    debug_vertex_allocation;
-	Vertex*          debug_mapped_vertex_data = nullptr;
-	bool             debug_show_chunk_bounds = true;
+	Debug_Vertex*    debug_mapped_vertex_data = nullptr;
+	bool             debug_show_chunk_bounds = false;
 
 	VkPipeline       debug_wireframe_pipeline;
 
@@ -53,8 +67,9 @@ struct World_Renderer {
 	bool             debug_wireframe = false;
 	bool             use_render_pass = true;
 
-	struct Vertex_Data {
-		fs::v3f32 position_offset;
+	struct Vertex_Push {
+		fs::v4f32 position_offset;
+		fs::u32 lod;
 	};
 	struct Transform_Data {
 		glm::mat4 projection;

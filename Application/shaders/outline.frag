@@ -5,8 +5,8 @@ layout (location = 0) out vec4 fragColor;
 
 layout (set = 0, binding = 0) uniform sampler2D depth;
 
-const vec2 resolution = vec2(1280.0, 720.0);
-//const vec2 resolution = vec2(1920.0, 1080.0);
+//const vec2 resolution = vec2(1280.0, 720.0);
+const vec2 resolution = vec2(1920.0, 1080.0);
 
 float getPixelDepth(int x, int y) {
     float d = 6.0 * texture(depth, uv + vec2(float(x)/resolution.x, float(y)/resolution.y)).r;

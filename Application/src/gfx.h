@@ -225,10 +225,11 @@ struct Render_Pass_Creator {
 
 namespace gfx {
 	struct Image {
-		VkImage image;
+		VkImage image = nullptr;
 		VmaAllocation allocation;
 
 		~Image() {
+			if (image)
 			vmaDestroyImage(engine.graphics.allocator, image, allocation);
 		}
 	};

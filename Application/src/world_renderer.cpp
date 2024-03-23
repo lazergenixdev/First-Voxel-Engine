@@ -35,14 +35,32 @@ auto World_Renderer::create(fs::Graphics& gfx, VkRenderPass in_render_pass) -> v
 		.create(&render_pass.handle);
 
 	Pipeline_Layout_Creator{}
-		.add_push_range(VK_SHADER_STAGE_VERTEX_BIT, sizeof(Vertex_Data))
+		.add_push_range(VK_SHADER_STAGE_VERTEX_BIT, sizeof(Vertex_Push))
 		.add_layout(engine.transform_2d.layout)
 		.create(&pipeline_layout);
 
 	auto vs = fs::create_shader(gfx.device, vert_shader::size, vert_shader::data);
 	auto fs = fs::create_shader(gfx.device, frag_shader::size, frag_shader::data);
 
-	vk::Basic_Vertex_Input<fs::v4f32> vi;
+	auto enable_blending = [](auto& state, bool add) {
+		state.blendEnable = VK_TRUE;
+		state.colorBlendOp = VK_BLEND_OP_ADD;
+		state.alphaBlendOp = VK_BLEND_OP_ADD;
+		state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+		state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+		if (add) {
+			state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+			state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		}
+
+	};
+	auto disable_blending = [](auto& state) {
+		state.blendEnable = VK_FALSE;
+	};
+
+	vk::Basic_Vertex_Input<decltype(Vertex::data)> vi;
 	auto pipeline_creator = Pipeline_Creator{ in_render_pass, pipeline_layout }
 		.add_shader(VK_SHADER_STAGE_VERTEX_BIT,   vs)
 		.add_shader(VK_SHADER_STAGE_FRAGMENT_BIT, fs)
@@ -50,9 +68,10 @@ auto World_Renderer::create(fs::Graphics& gfx, VkRenderPass in_render_pass) -> v
 		.add_dynamic_state(VK_DYNAMIC_STATE_VIEWPORT)
 		.add_dynamic_state(VK_DYNAMIC_STATE_SCISSOR);
 	
-	pipeline_creator.rasterization_state.cullMode = VK_CULL_MODE_BACK_BIT;
-//	pipeline_creator.rasterization_state.cullMode = VK_CULL_MODE_NONE;
+	pipeline_creator.rasterization_state.cullMode = CPU_SIDE_BACKFACE_CULLING? VK_CULL_MODE_NONE:VK_CULL_MODE_BACK_BIT;
 //	pipeline_creator.multisample_state.rasterizationSamples = VK_SAMPLE_COUNT_8_BIT;
+//	pipeline_creator.depth_stencil_state.depthTestEnable = VK_FALSE;
+//	enable_blending(pipeline_creator.blend_attachment, true);
 	pipeline_creator.create(&pipeline);
 
 	vkDestroyShaderModule(gfx.device, pipeline_creator.shaders[1].module, nullptr);
@@ -61,6 +80,7 @@ auto World_Renderer::create(fs::Graphics& gfx, VkRenderPass in_render_pass) -> v
 	pipeline_creator.rasterization_state.depthBiasSlopeFactor    = 0.0f;
 	pipeline_creator.rasterization_state.depthBiasEnable         = VK_TRUE;
 	pipeline_creator.rasterization_state.polygonMode = VK_POLYGON_MODE_LINE;
+	disable_blending(pipeline_creator.blend_attachment);
 	pipeline_creator.create_and_destroy_shaders(&debug_wireframe_pipeline);
 
 	vk::Basic_Vertex_Input<fs::v3f32> debug_vi;
@@ -70,13 +90,7 @@ auto World_Renderer::create(fs::Graphics& gfx, VkRenderPass in_render_pass) -> v
 	pipeline_creator.rasterization_state.polygonMode = VK_POLYGON_MODE_FILL;
 	pipeline_creator.rasterization_state.cullMode = VK_CULL_MODE_NONE;
 	pipeline_creator.input_assembly_state.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-	pipeline_creator.blend_attachment.blendEnable = VK_TRUE;
-	pipeline_creator.blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
-	pipeline_creator.blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
-	pipeline_creator.blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-	pipeline_creator.blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-	pipeline_creator.blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-	pipeline_creator.blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+	enable_blending(pipeline_creator.blend_attachment, false);
 	pipeline_creator.shaders[0].module = fs::create_shader(gfx.device, debug_vs::size, debug_vs::data);
 	pipeline_creator.shaders[1].module = fs::create_shader(gfx.device, debug_fs::size, debug_fs::data);
 	pipeline_creator.create_and_destroy_shaders(&debug_pipeline);
@@ -117,36 +131,9 @@ auto World_Renderer::create(fs::Graphics& gfx, VkRenderPass in_render_pass) -> v
 		allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
 		allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 		VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-		bufferInfo.size = 2000 * max_vertex_count_per_chunk * sizeof(Vertex);
-		bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-		vmaCreateBuffer(engine.graphics.allocator, &bufferInfo, &allocInfo, &vertex_buffer, &vertex_allocation, nullptr);
-		vmaMapMemory(engine.graphics.allocator, vertex_allocation, (void**)&mapped_vertex_gpu_data);
-		vertex_cpu_data = new Vertex[2000 * max_vertex_count_per_chunk];
-		total_vertex_gpu_memory += bufferInfo.size;
-	}
-	{
-		VmaAllocationCreateInfo allocInfo = {};
-		allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-		allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-		VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-		bufferInfo.size = 1'000 * sizeof(Debug_Vertex);
+		bufferInfo.size = (1 << 12) * sizeof(Debug_Vertex);
 		bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 		vmaCreateBuffer(engine.graphics.allocator, &bufferInfo, &allocInfo, &debug_vertex_buffer, &debug_vertex_allocation, nullptr);
-		
-		vmaMapMemory(engine.graphics.allocator, debug_vertex_allocation, (void**)&debug_mapped_vertex_data);
-		auto const N = 16;
-		auto dv = new Debug_Vertex[2 * N * N];
-		for (int y = 0; y < N; ++y)
-		for (int x = 0; x < N; ++x) {
-			auto const X = float(x) - N/2;
-			auto const Y = float(y) - N/2;
-			dv[y*N*2+x*2]   = { {X*128,-1,Y*128} };
-			dv[y*N*2+x*2+1] = { {X*128, 1,Y*128} };
-		};
-		memcpy(debug_mapped_vertex_data, dv, 2*N*N*sizeof(Debug_Vertex));
-		vmaUnmapMemory(engine.graphics.allocator, debug_vertex_allocation);
-		vmaFlushAllocation(engine.graphics.allocator, debug_vertex_allocation, 0, 2*N*N*sizeof(Debug_Vertex));
-		delete [] dv;
 	}
 
 	{
@@ -171,12 +158,33 @@ auto World_Renderer::create(fs::Graphics& gfx, VkRenderPass in_render_pass) -> v
 		write.pBufferInfo = &bufferInfo;
 		vkUpdateDescriptorSets(gfx.device, 1, &write, 0, nullptr);
 	}
+
+	create_vertex_buffers();
+}
+
+auto World_Renderer::create_vertex_buffers() -> void {
+	VmaAllocationCreateInfo allocInfo = {};
+	allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+	allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+	VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+	bufferInfo.size = 2000 * max_vertex_count_per_chunk * sizeof(Vertex);
+	bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+
+	FS_FOR(2) {
+		vmaCreateBuffer(engine.graphics.allocator, &bufferInfo, &allocInfo, &vertex_buffer[i], &vertex_allocation[i], nullptr);
+		vmaMapMemory(engine.graphics.allocator, vertex_allocation[i], (void**)&mapped_vertex_gpu_data[i]);
+	}
+
+//	vertex_cpu_data = new Vertex[2000 * max_vertex_count_per_chunk];
+	total_vertex_gpu_memory += bufferInfo.size;
 }
 
 auto World_Renderer::destroy() -> void {
 	delete[] vertex_cpu_data;
-	vmaUnmapMemory(engine.graphics.allocator, vertex_allocation);
-	vmaDestroyBuffer(engine.graphics.allocator, vertex_buffer, vertex_allocation);
+	FS_FOR(2) {
+		vmaUnmapMemory(engine.graphics.allocator, vertex_allocation[i]);
+		vmaDestroyBuffer(engine.graphics.allocator, vertex_buffer[i], vertex_allocation[i]);
+	}
 	vmaDestroyBuffer(engine.graphics.allocator, debug_vertex_buffer, debug_vertex_allocation);
 	vmaDestroyBuffer(engine.graphics.allocator, transform_buffer, transform_allocation);
 	vmaDestroyBuffer(engine.graphics.allocator, index_buffer, index_allocation);
@@ -232,24 +240,54 @@ auto World_Renderer::resize_frame_buffers() -> void {
 }
 
 auto World_Renderer::upload_world(World& world) -> void {
+	vbi = fs::u32(vbi == 0);
+	vmaMapMemory(engine.graphics.allocator, debug_vertex_allocation, (void**)&debug_mapped_vertex_data);
+	int dvc = 0;
+
+	total_number_of_quads = 0;
 	fs::u32 offset = 0;
-	for (auto&& chunk : world.chunks) {
-		auto const quad_count = fs::u32(chunk.quads.size());
-		chunk.vertex_offset = offset;
-		chunk.index_count = 6 * quad_count;
 
-		if (chunk.index_count > max_index_count_per_chunk) {
-			__debugbreak();
+	chunks.clear();
+	auto& vertex_data = mapped_vertex_gpu_data[vbi];
+#if LOOP_ALL
+	for (auto&& [k,chunk] : world.loaded_chunks) {
+#else
+	auto add_chunk_quads = [&](LOD_Node* node, Chunk* chunk) -> void {
+#endif
+#if LOOP_ALL
+		if (!chunk.active || chunk.place_holder) continue;
+#else
+		// we want to recurse up the tree to find something a chunk that is loaded.
+		if (chunk->place_holder) {
+			for(;;) {
+				if (node->parent == (fs::u16)-1) return;
+				node = world.node_allocator.base + node->parent;
+
+				fs::v3s32 p = position_from_quad_tree(node);
+				auto it = world.loaded_chunks.find(p);
+				if (it != world.loaded_chunks.end() && !it->second.place_holder) {
+					//__debugbreak();
+					chunk = &it->second;
+					break;
+				}
+			}
 		}
+#endif
+		auto vertex_offset = offset;
 
-		auto const scale = (1 << chunk.lod);
-		for (auto const& q : chunk.quads) {
+		debug_mapped_vertex_data[dvc++] = { fs::v3f32(chunk->position.x,-1, chunk->position.z) };
+		debug_mapped_vertex_data[dvc++] = { fs::v3f32(chunk->position.x, 1, chunk->position.z) };
+
+		fs::u32 quad_count = 0;
+		auto const scale = TEST?1:(1 << chunk->lod);
+		auto const S = 1 << chunk->lod;
+		for (auto const& q : chunk->quads) {
 			int const x = int(q.x & 0x7F) * scale;
 			int const y = int(q.y & 0x7F) * scale;
 			int const z = int(q.z & 0x7F) * scale;
 
-			auto a = q.l0;
-			auto b = q.l1;
+			int a = q.l0;
+			int b = q.l1;
 
 			auto const normal = normal_index(q);
 			a *= scale;
@@ -258,43 +296,96 @@ auto World_Renderer::upload_world(World& world) -> void {
 			switch (normal) {
 			default:
 			break; case Normal::Pos_Y: {
-				vertex_cpu_data[offset++] = Vertex(x+a, y, z+b, q.palette);
-				vertex_cpu_data[offset++] = Vertex(x+a, y, z,   q.palette);
-				vertex_cpu_data[offset++] = Vertex(x,   y, z,   q.palette);
-				vertex_cpu_data[offset++] = Vertex(x,   y, z+b, q.palette);
+#if CPU_SIDE_BACKFACE_CULLING
+				if (world.center_position.y > float(y * S + chunk->position.y)) {
+#endif
+					quad_count++;
+					vertex_data[offset++] = Vertex(x+a, y, z+b, q.palette);
+					vertex_data[offset++] = Vertex(x+a, y, z,   q.palette);
+					vertex_data[offset++] = Vertex(x,   y, z,   q.palette);
+					vertex_data[offset++] = Vertex(x,   y, z+b, q.palette);
+#if CPU_SIDE_BACKFACE_CULLING
+				}
+#endif
 			}
 			break; case Normal::Neg_X: {
-				vertex_cpu_data[offset++] = Vertex(x,   y+a, z+b, q.palette);
-				vertex_cpu_data[offset++] = Vertex(x,   y+a, z,   q.palette);
-				vertex_cpu_data[offset++] = Vertex(x,   y,   z,   q.palette);
-				vertex_cpu_data[offset++] = Vertex(x,   y,   z+b, q.palette);
+#if CPU_SIDE_BACKFACE_CULLING
+				if (world.center_position.x < float(x * S + chunk->position.x)) {
+#endif
+					quad_count++;
+					vertex_data[offset++] = Vertex(x, y+a, z+b, q.palette);
+					vertex_data[offset++] = Vertex(x, y+a, z,   q.palette);
+					vertex_data[offset++] = Vertex(x, y,   z,   q.palette);
+					vertex_data[offset++] = Vertex(x, y,   z+b, q.palette);
+#if CPU_SIDE_BACKFACE_CULLING
+				}
+#endif
 			}
 			break; case Normal::Pos_X: {
-				vertex_cpu_data[offset++] = Vertex(x+scale, y,   z,   q.palette);
-				vertex_cpu_data[offset++] = Vertex(x+scale, y+a, z,   q.palette);
-				vertex_cpu_data[offset++] = Vertex(x+scale, y+a, z+b, q.palette);
-				vertex_cpu_data[offset++] = Vertex(x+scale, y,   z+b, q.palette);
+#if CPU_SIDE_BACKFACE_CULLING
+				if (world.center_position.x > float(x * S + chunk->position.x)) {
+#endif
+					quad_count++;
+					vertex_data[offset++] = Vertex(x+scale, y,   z,   q.palette);
+					vertex_data[offset++] = Vertex(x+scale, y+a, z,   q.palette);
+					vertex_data[offset++] = Vertex(x+scale, y+a, z+b, q.palette);
+					vertex_data[offset++] = Vertex(x+scale, y,   z+b, q.palette);
+#if CPU_SIDE_BACKFACE_CULLING
+				}
+#endif
 			}
 			break; case Normal::Neg_Z: {
-				vertex_cpu_data[offset++] = Vertex(x+a, y+b, z, q.palette);
-				vertex_cpu_data[offset++] = Vertex(x+a, y,   z, q.palette);
-				vertex_cpu_data[offset++] = Vertex(x,   y,   z, q.palette);
-				vertex_cpu_data[offset++] = Vertex(x,   y+b, z, q.palette);
+#if CPU_SIDE_BACKFACE_CULLING
+				if (world.center_position.z < float(z * S + chunk->position.z)) {
+#endif
+					quad_count++;
+					vertex_data[offset++] = Vertex(x+a, y+b, z, q.palette);
+					vertex_data[offset++] = Vertex(x+a, y,   z, q.palette);
+					vertex_data[offset++] = Vertex(x,   y,   z, q.palette);
+					vertex_data[offset++] = Vertex(x,   y+b, z, q.palette);
+#if CPU_SIDE_BACKFACE_CULLING
+				}
+#endif
 			}
 			break; case Normal::Pos_Z: {
-				vertex_cpu_data[offset++] = Vertex(x,   y,   z+scale, q.palette);
-				vertex_cpu_data[offset++] = Vertex(x+a, y,   z+scale, q.palette);
-				vertex_cpu_data[offset++] = Vertex(x+a, y+b, z+scale, q.palette);
-				vertex_cpu_data[offset++] = Vertex(x,   y+b, z+scale, q.palette);
+#if CPU_SIDE_BACKFACE_CULLING
+				if (world.center_position.z > float(z * S + chunk->position.z)) {
+#endif
+					quad_count++;
+					vertex_data[offset++] = Vertex(x,   y,   z+scale, q.palette);
+					vertex_data[offset++] = Vertex(x+a, y,   z+scale, q.palette);
+					vertex_data[offset++] = Vertex(x+a, y+b, z+scale, q.palette);
+					vertex_data[offset++] = Vertex(x,   y+b, z+scale, q.palette);
+#if CPU_SIDE_BACKFACE_CULLING
+				}
+#endif
 			}
 			}
 		}
+
+		auto index_count = 6 * quad_count;
+		total_number_of_quads += quad_count;
+
+		// This bad.
+		if (index_count > max_index_count_per_chunk) {
+			index_count = max_index_count_per_chunk;
+		}
+
+		chunks.emplace_back(chunk->position, chunk->lod, vertex_offset, index_count);
 	}
+#if LOOP_ALL
+#else
+	;
+	world.for_each_chunk(&world.root, add_chunk_quads);
+#endif
+	
+	vmaUnmapMemory(engine.graphics.allocator, debug_vertex_allocation);
+	vmaFlushAllocation(engine.graphics.allocator, debug_vertex_allocation, 0, dvc * sizeof(Debug_Vertex));
 
 	auto const size = offset * sizeof(Vertex);
 	used_vertex_gpu_memory = size;
-	memcpy(mapped_vertex_gpu_data, vertex_cpu_data, size);
-	vmaFlushAllocation(engine.graphics.allocator, vertex_allocation, 0, size);
+//	memcpy(mapped_vertex_gpu_data, vertex_cpu_data, size);
+	vmaFlushAllocation(engine.graphics.allocator, vertex_allocation[vbi], 0, size);
 }
 
 auto World_Renderer::draw(
@@ -321,43 +412,42 @@ auto World_Renderer::draw(
 	
 	FS_VK_BIND_DESCRIPTOR_SETS(ctx.command_buffer, pipeline_layout, 1, &transform_set);
 
-#if 0
-	vkCmdBindPipeline(
-		ctx.command_buffer,
-		VK_PIPELINE_BIND_POINT_GRAPHICS,
-		(debug_wireframe? debug_wireframe_pipeline : pipeline)
-	);
-#else
 	vkCmdBindPipeline(ctx.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-#endif
 
-	Vertex_Data push;
-	for (auto&& c: world.chunks) {
-		push.position_offset = fs::v3f32(c.position);
+	Vertex_Push push;
+	for (auto&& [position, lod, vertex_offset, index_count]: chunks) {
+		push.position_offset = fs::v4f32(fs::v3f32(position), 0.0f);
+		push.lod = lod;
 		vkCmdPushConstants(ctx.command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
-		vkCmdDrawIndexed(ctx.command_buffer, c.index_count, 1, 0, c.vertex_offset, 0);
+		vkCmdDrawIndexed(ctx.command_buffer, index_count, 1, 0, vertex_offset, 0);
 	}
 
 	if (debug_wireframe) {
 		vkCmdBindPipeline(ctx.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, debug_wireframe_pipeline);
-		for (auto&& c: world.chunks) {
-			push.position_offset = fs::v3f32(c.position);
+		for (auto&& [position, lod, vertex_offset, index_count]: chunks) {
+			push.position_offset = fs::v4f32(fs::v3f32(position), 0.0f);
+			push.lod = lod;
 			vkCmdPushConstants(ctx.command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
-			vkCmdDrawIndexed(ctx.command_buffer, c.index_count, 1, 0, c.vertex_offset, 0);
+			vkCmdDrawIndexed(ctx.command_buffer, index_count, 1, 0, vertex_offset, 0);
 		}
 	}
 
 	if (debug_show_chunk_bounds) {
-		push.position_offset = fs::v3f32(cc.get_chunk_position());
+		push.position_offset = fs::v4f32(fs::v3f32(cc.get_chunk_position()), 0.0f);
 		push.position_offset.y = 0.0f;
 		vkCmdPushConstants(ctx.command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
 		vkCmdBindPipeline(ctx.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, debug_pipeline);
 		VkDeviceSize offset = 0;
 		vkCmdBindVertexBuffers(ctx.command_buffer, 0, 1, &debug_vertex_buffer, &offset);
-		vkCmdDraw(ctx.command_buffer, 2*16*16, 1, 0, 0);
+		vkCmdDraw(ctx.command_buffer, 2 * (fs::u32)world.loaded_chunks.size(), 1, 0, 0);
 	}
 
 	end_render(ctx);
+	
+	engine.debug_layer.add("Loaded Chunks     = %i", world.loaded_chunks.size());
+	engine.debug_layer.add("Chunks Drawn      = %i", chunks.size());
+	engine.debug_layer.add("Number of Quads   = %i", total_number_of_quads);
+	engine.debug_layer.add("Total Quad Memory = %.2f MiB", SIZE_MB(world.total_quad_memory));
 }
 
 auto World_Renderer::begin_render(fs::Render_Context& ctx) -> void {
@@ -380,7 +470,7 @@ auto World_Renderer::begin_render(fs::Render_Context& ctx) -> void {
 	vkCmdBindIndexBuffer(ctx.command_buffer, index_buffer, 0, VK_INDEX_TYPE_UINT16);
 
 	VkDeviceSize offset = 0;
-	vkCmdBindVertexBuffers(ctx.command_buffer, 0, 1, &vertex_buffer, &offset);
+	vkCmdBindVertexBuffers(ctx.command_buffer, 0, 1, &vertex_buffer[vbi], &offset);
 
 	VkViewport viewport{};
 	viewport.x = 0.0f;
