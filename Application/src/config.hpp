@@ -18,6 +18,6 @@ inline int64_t total_number_of_quads   = 0;
 
 #define CPU_SIDE_BACKFACE_CULLING 1
 
-#define FREE_FLY 1
+#define FREE_FLY 0
 
 #endif

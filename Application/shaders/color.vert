@@ -11,7 +11,7 @@ layout (push_constant) uniform A {
 
 layout (set = 0, binding = 0) uniform B {
 	mat4 view_projection;
-	float time;
+	ivec4 position;
 } u;
 
 #define COLOR(X) pow(vec3(.1, .7, .8), vec3(4.*X))
@@ -31,9 +31,9 @@ vec3 pal( in float t, in vec3 a, in vec3 b, in vec3 c, in vec3 d ) {
     return a + b*cos( 6.28318*(c*t+d) );
 }
 
-float wave(vec2 p) {
-	return 20.0 * (sin(p.x/128.0 + u.time) + sin(p.y/128.0 + u.time));
-}
+//float wave(vec2 p) {
+//	return 20.0 * (sin(p.x/128.0 + u.time) + sin(p.y/128.0 + u.time));
+//}
 
 #define BYTE(X) ((X) & 0xFF)
 

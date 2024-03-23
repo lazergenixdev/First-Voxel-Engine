@@ -10,19 +10,17 @@ volatile fs::s64 World::total_quad_memory = 0;
 
 auto height_from_xz(int x, int z) -> float {
 	float h =
+//	0.0f
 //	36.0f + 32.0f * stb_perlin_noise3(float(x)/2e2f, 0.0f, float(z)/2e2f, 0, 0, 0)
 //	64.0f + 80.0f * stb_perlin_noise3(float(x)/5e2f, 0.0f, float(z)/5e2f, 0, 0, 0)
 //	128.0f + 80.0f * stb_perlin_fbm_noise3(float(x)/1e3f, 0.0f, float(z)/1e3f, 2.0f, 0.5f, 6)
 //	64.0f - 80.0f * stb_perlin_turbulence_noise3(float(x)/5e2f, 0.0f, float(z)/5e2f, 2.0f, 0.5f, 6)
 	64.0f - 256.0f * stb_perlin_turbulence_noise3(float(x)/3e3f, 0.0f, float(z)/3e3f, 2.0f, 0.5f, 6)
 
-//	+ 5.e3f * stb_perlin_turbulence_noise3(float(x)/1e5f, 0.74352f, float(z)/1e5f, 2.0f, 0.5f, 4)
-//	- 2.4e3f
-
-	+ 5.e4f * stb_perlin_turbulence_noise3(float(x)/6e5f, -0.4352f, float(z)/6e5f, 2.0f, 0.5f, 10)
-	- 2.5e4f
+	+ 6.e4f * stb_perlin_turbulence_noise3(float(x)/6e5f, -0.4352f, float(z)/6e5f, 2.0f, 0.5f, 10)
+	- 3.0e4f
 	;
-//	if (h < -3600.0f) return -3600.0f;
+//	if (h < -4500.0f) return -4500.0f;
 	return h;
 }
 
@@ -367,6 +365,7 @@ auto lod_from_distance(float dist) -> int {
 	if (dist < s + d * 128) return 7;
 	if (dist < s + d * 256) return 8;
 	if (dist < s + d * 512) return 9;
+	if (dist < s + d * 512*2) return 10;
 	return 10;
 #endif
 #endif
@@ -472,6 +471,9 @@ auto World::generate_chunks() -> void {
 	}
 #elif 1
 	root.position = {};
+	int n = world_size - 2 + 6;
+	root.position.x = ((int(center_position.x) + (1 << (n-1))) >> n) << n;
+	root.position.y = ((int(center_position.z) + (1 << (n-1))) >> n) << n;
 	root.parent = (fs::u16)-1;
 	node_allocator.reset();
 	generate_lod_tree(&root, world_size);

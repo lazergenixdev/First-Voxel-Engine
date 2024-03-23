@@ -31,6 +31,8 @@ struct World_Renderer {
 	gfx::Image       color_image;
 	VkFramebuffer    frame_buffers[fs::Graphics::max_sc_images];
 	VkFormat         depth_format = VK_FORMAT_D32_SFLOAT;
+	fs::Single_Descriptor_Set_Layout<VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER>
+		             transform_layout;
 	VkDescriptorSet  transform_set;
 	VkBuffer         transform_buffer;
 	VmaAllocation    transform_allocation;
@@ -73,7 +75,7 @@ struct World_Renderer {
 	};
 	struct Transform_Data {
 		glm::mat4 projection;
-		float time;
+		glm::ivec4 position_offset;
 	};
 
 private:

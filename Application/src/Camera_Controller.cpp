@@ -32,10 +32,8 @@ auto Camera_Controller::get_transform() const -> glm::mat4 {
 	glm::mat4 Projection = fs::lerp(Perspective, Orthographic, abs(sinf(t)));
 #endif
 
-//	auto P = position - glm::vec3((glm::ivec3(glm::floor(position)) >> 3) << 3);
-//	P += glm::vec3(float(render_chunk_radius * 8), 0, float(render_chunk_radius * 8));
-//	P.y = position.y;
-	auto P = position;
+//	auto P = position;
+	auto P = glm::fract(position);
 
 	auto eye = P;
 	auto center = get_view_direction() + eye;
@@ -130,7 +128,7 @@ auto Camera_Controller::update(float dt) -> void {
 
 	float speed = 20.0f;
 	if (engine.modifier_keys & fs::keys::Mod_Control) speed *= 30.0f;
-	if (engine.modifier_keys & fs::keys::Mod_Alt)     speed *= 30.0f;
+	if (engine.modifier_keys & fs::keys::Mod_Alt)     speed *= 300.0f;
 
 	auto [forward, left] = get_move_vectors();
 	auto up = glm::vec3(0.0f, 1.0f, 0.0f);

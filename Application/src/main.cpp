@@ -148,7 +148,7 @@ public:
 		auto total_mib = SIZE_MB(total_vertex_gpu_memory);
 		auto usage = double(100 * used_vertex_gpu_memory) / double(total_vertex_gpu_memory);
 		engine.debug_layer.add("GPU memory usage: %.2f%% / %.3f MiB", usage, total_mib);
-		engine.debug_layer.add("World Size: %i x %i", CHUNK_SIZE << world.world_size, CHUNK_SIZE << world.world_size);
+		engine.debug_layer.add("Render Size: %i x %i", CHUNK_SIZE << world.world_size, CHUNK_SIZE << world.world_size);
 	}
 
 	virtual void on_resize() override {

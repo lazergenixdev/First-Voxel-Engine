@@ -34,9 +34,11 @@ auto World_Renderer::create(fs::Graphics& gfx, VkRenderPass in_render_pass) -> v
 		.add_external_subpass_dependency(0)
 		.create(&render_pass.handle);
 
+	transform_layout.create(gfx);
+
 	Pipeline_Layout_Creator{}
 		.add_push_range(VK_SHADER_STAGE_VERTEX_BIT, sizeof(Vertex_Push))
-		.add_layout(engine.transform_2d.layout)
+		.add_layout(transform_layout)
 		.create(&pipeline_layout);
 
 	auto vs = fs::create_shader(gfx.device, vert_shader::size, vert_shader::data);
@@ -137,7 +139,7 @@ auto World_Renderer::create(fs::Graphics& gfx, VkRenderPass in_render_pass) -> v
 	}
 
 	{
-		VkDescriptorSetLayout layouts[] = { engine.transform_2d.layout };
+		VkDescriptorSetLayout layouts[] = { transform_layout };
 		VkDescriptorSetAllocateInfo descSetAllocInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
 		descSetAllocInfo.descriptorPool = engine.descriptor_pool;
 		descSetAllocInfo.pSetLayouts = layouts;
@@ -198,6 +200,7 @@ auto World_Renderer::destroy() -> void {
 	vkDestroyImageView(engine.graphics.device, color_view, nullptr);
 	FS_FOR(engine.graphics.sc_image_count)
 		vkDestroyFramebuffer(engine.graphics.device, frame_buffers[i], nullptr);
+	transform_layout.destroy(engine.graphics);
 	render_pass.destroy();
 }
 
@@ -398,10 +401,13 @@ auto World_Renderer::draw(
 	begin_render(ctx);
 	t += dt;
 
+	auto p = fs::v3s32::from(glm::ivec3(cc.position));
+
 	{
 		Transform_Data transform = {
 			.projection = cc.get_transform(),
-			.time       = t,
+		//	.time       = t,
+			.position_offset = glm::ivec4(glm::ivec3(cc.position),0)
 		};
 		Transform_Data* gpu_transform;
 		vmaMapMemory(gfx.allocator, transform_allocation, (void**)&gpu_transform);
@@ -416,7 +422,7 @@ auto World_Renderer::draw(
 
 	Vertex_Push push;
 	for (auto&& [position, lod, vertex_offset, index_count]: chunks) {
-		push.position_offset = fs::v4f32(fs::v3f32(position), 0.0f);
+		push.position_offset = fs::v4f32(fs::v3f32(position-p), 0.0f);
 		push.lod = lod;
 		vkCmdPushConstants(ctx.command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
 		vkCmdDrawIndexed(ctx.command_buffer, index_count, 1, 0, vertex_offset, 0);
@@ -425,7 +431,7 @@ auto World_Renderer::draw(
 	if (debug_wireframe) {
 		vkCmdBindPipeline(ctx.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, debug_wireframe_pipeline);
 		for (auto&& [position, lod, vertex_offset, index_count]: chunks) {
-			push.position_offset = fs::v4f32(fs::v3f32(position), 0.0f);
+			push.position_offset = fs::v4f32(fs::v3f32(position-p), 0.0f);
 			push.lod = lod;
 			vkCmdPushConstants(ctx.command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
 			vkCmdDrawIndexed(ctx.command_buffer, index_count, 1, 0, vertex_offset, 0);

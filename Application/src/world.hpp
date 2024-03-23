@@ -65,7 +65,7 @@ struct Chunk_Ref {
 };
 
 struct World {
-	static constexpr int world_size = 14;
+	static constexpr int world_size = 15;
 
 	LOD_Node root;
 	bump_allocator<LOD_Node> node_allocator{ 1 << 16 };
