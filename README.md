@@ -1,5 +1,5 @@
 # My First Voxel Engine
-![](screenshots/image.png)
+![](screenshots/screenshot_2024-03-23_02-37-19.png)
 
 # Building
 1. Run `setup_windows.bat` (or use command `premake5 vs2022` if you have premake)
@@ -11,26 +11,21 @@
 - Dynamic chunk remeshing (multi-threaded)
 - Static skybox (just using a cubemap)
 - Greedy Meshing (unoptimized, but still reasonably fast)
-- Basic diffuse + specular lighting
-- Outline post processing pass using the depth buffer
-- Textured blocks with mipmapping
+- Outline post processing sub-pass using the depth buffer
+- ~~Diffuse + specular lighting~~
+- ~~Textured blocks with mipmapping~~
 
-## Wireframe view
-![](screenshots/wireframe.png)
-## View under the map to verify back face culling
-![](screenshots/back_face_culling.png)
+## Some development pictures
+![](screenshots/lod_2024-02-11_01-36-35.png)
+![](screenshots/lod_2024-02-11_01-36-24.png)
 
 # Further improvements to be made:
-- Smaller vertex size (currently 24 bytes per vertex 😞)
-- Optimized meshing (using SIMD extensions + bigger chunk size)
+- Optimized meshing (using SIMD extensions)
 - Dynamic skybox with sun as directional light source
 - Shadow mapping
 - Screen-Space Ambient Occlusion
 - Distance Fog
 - Frustum Culling
-- Add/Removing blocks
-- debug outline flickering
-- debug mipmap edges
 
 # References
 #### Greedy Meshing: https://0fps.net/2012/06/30/meshing-in-a-minecraft-game/
