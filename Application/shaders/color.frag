@@ -63,6 +63,6 @@ void main() {
     vec3 h = vec3(position.y*0.2 + 0.5);
     fragColor = vec4(h*max(u.normal,dot(normal,vec3(0.0,1.0,0.0))), 1.0);
 #elif 0
-    fragColor = vec4(1.0);
+    fragColor = vec4(color.x);
 #endif
 }

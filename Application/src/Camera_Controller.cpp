@@ -5,6 +5,7 @@
 #include <glm/ext/quaternion_float.hpp>
 #include "config.hpp"
 
+#define DEBUG_CULLING 0
 extern fs::Engine engine;
 
 auto Camera_Controller::get_chunk_position() const -> fs::v3s32 {
@@ -35,8 +36,13 @@ auto Camera_Controller::get_transform() const -> glm::mat4 {
 //	auto P = position;
 	auto P = glm::fract(position);
 
+#if DEBUG_CULLING
+	auto eye = glm::vec3(0.0f, 10'000.0f, 0.0f);
+	auto center = glm::vec3(0.01f, -0.99f, 0.01f) + eye;
+#else
 	auto eye = P;
 	auto center = get_view_direction() + eye;
+#endif
 	auto up = glm::vec3(0.0f, 1.0f, 0.0f);
 
 	return glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f))

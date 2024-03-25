@@ -420,12 +420,18 @@ auto World_Renderer::draw(
 
 	vkCmdBindPipeline(ctx.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
+	auto view = cc.get_view_direction();
+
 	Vertex_Push push;
 	for (auto&& [position, lod, vertex_offset, index_count]: chunks) {
 		push.position_offset = fs::v4f32(fs::v3f32(position-p), 0.0f);
 		push.lod = lod;
-		vkCmdPushConstants(ctx.command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
-		vkCmdDrawIndexed(ctx.command_buffer, index_count, 1, 0, vertex_offset, 0);
+		int cs = CHUNK_SIZE << lod - 1;//chunk size
+		auto hh = glm::vec3(push.position_offset.x + cs, push.position_offset.y, push.position_offset.z + cs);
+		if (glm::dot(hh, view) >= 0.0f) {
+			vkCmdPushConstants(ctx.command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
+			vkCmdDrawIndexed(ctx.command_buffer, index_count, 1, 0, vertex_offset, 0);
+		}
 	}
 
 	if (debug_wireframe) {
